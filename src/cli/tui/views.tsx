@@ -8,7 +8,7 @@ import type { ChannelInstanceRecord, PendingBindingRecord } from "../../state/pe
 import { chatCodexTitle } from "../../runtime/package-info.js";
 import type { BindingSummary, SessionChoices } from "../actions/binding-actions.js";
 import { formatSessionActiveTime } from "../actions/binding-actions.js";
-import { channelDisplayName, formatFullDateTime, formatManagedChannelLabel, formatShortDateTime, isChannelGroupReceiveEnabled } from "../actions/channel-actions.js";
+import { channelDisplayName, formatFullDateTime, formatManagedChannelLabel, formatShortDateTime } from "../actions/channel-actions.js";
 import type { LauncherDashboard, PairingDashboardSummary, PairingRouteSummary, StartValidation } from "../actions/launcher-actions.js";
 import { formatChannelStatusDetails } from "../serve-wizard.js";
 import type { ContextRefreshTarget, PermissionTarget, Screen, SessionTarget } from "./types.js";
@@ -163,26 +163,22 @@ export function ChannelsView({ channels, selected, channelCursor = 0 }: { channe
 
 export function ChannelDetailView({ channel, selected }: { channel?: LauncherDashboard["channels"][number]; selected: number }): React.JSX.Element {
   if (!channel) return <Frame title="渠道详情"><Muted text="这个渠道已经不存在。" /></Frame>;
-  const isFeishu = channel.record.type === "feishu" || channel.record.type === "lark";
-  const groupEnabled = isChannelGroupReceiveEnabled(channel.record);
   const items = channel.record.type === "weixin"
     ? ["设置微信主聊天绑定", "修改备注", channel.record.enabled ? "停用这个渠道" : "启用这个渠道", "删除这个渠道", "状态详情"]
     : [
         "输入/更新本进程凭证",
-        groupEnabled ? "关闭群聊接收" : "开启群聊接收",
         "修改备注",
         channel.record.enabled ? "停用这个渠道" : "启用这个渠道",
         "删除这个渠道",
         "状态详情",
       ];
   return (
-    <Frame title="渠道详情" subtitle={isFeishu ? "Enter 执行  e 启停  g 群聊接收  Esc 返回" : "Enter 执行  e 启停  Esc 返回"}>
+    <Frame title="渠道详情" subtitle="Enter 执行  e 启停  Esc 返回">
       <KeyValue label="类型" value={channel.record.type === "weixin" ? "微信" : "飞书"} />
       <KeyValue label="备注" value={channel.record.displayName ?? "未设置"} />
       <KeyValue label="账号标识" value={channel.status.account ?? channel.record.defaultAccountId ?? "default"} />
       <KeyValue label="实例" value={channel.record.id} />
       <KeyValue label="启用" value={channel.record.enabled ? "是" : "否"} />
-      {isFeishu ? <KeyValue label="群聊接收" value={groupEnabled ? "开启" : "关闭"} /> : null}
       <KeyValue label="状态" value={channelStatus(channel.status.state)} />
       <KeyValue label="添加时间" value={formatFullDateTime(channel.record.createdAt)} />
       <KeyValue label="更新时间" value={formatFullDateTime(channel.record.updatedAt)} />

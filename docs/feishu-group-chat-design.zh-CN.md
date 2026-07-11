@@ -15,6 +15,20 @@ feishu:<accountId>:group:<chat_id>
 
 因此飞书群聊不是协议层问题，主要是产品策略、权限模型、状态持久化和真实链路验证问题。
 
+## 0.1.5 发布边界
+
+`0.1.5` 正式版暂不开放飞书群聊接收。
+
+当前代码保留飞书群聊的底层协议映射、群 route 表达、群名册和权限相关基础结构，但公开入口全部关闭：
+
+- `src/channels/feishu/feishu-feature-flags.ts` 中 `FEISHU_GROUP_RECEIVE_PUBLICLY_ENABLED=false`。
+- `FeishuAdapter` 即使收到 `groupEnabled=true`，公开版有效能力仍保持 `group=false`。
+- 飞书群聊入站事件会在 adapter 层跳过，不下载群文件资源，不创建 group route。
+- 飞书私聊 `/group on` 和隐藏兼容别名 `/grop on|off` 只返回“暂不支持开启群聊接收”，不会修改运行期 capability。
+- TUI 渠道详情暂时隐藏“群聊接收”开关。
+
+这样做的原因是飞书群聊真实链路、群成员权限、群内审批策略和管理交互还没有完成公开版本所需的验证。后续重新开放时，应先把本节开关改回公开启用，再补真实飞书群聊测试报告。
+
 ## 目标
 
 1. 飞书群聊默认只在用户 @ 机器人时触发 Codex。

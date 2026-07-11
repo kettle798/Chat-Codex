@@ -80,7 +80,7 @@ test("Feishu private chat uses Bridge commands and default progress delivery", a
   assert.ok(texts.some((text) => text.includes("`/progress [realtime|silent|brief]`")));
   assert.equal(texts.some((text) => text.includes("`detailed`")), false);
   assert.equal(texts.some((text) => text.includes("`tools`")), false);
-  assert.ok(texts.some((text) => text.includes("/group on|off")));
+  assert.equal(texts.some((text) => text.includes("/group on|off")), false);
   assert.equal(texts.some((text) => text.includes("/grop")), false);
   assert.ok(texts.some((text) => text.includes("Codex 正在处理这条消息。")));
   assert.ok(texts.some((text) => text.includes("正在分析飞书私聊消息。")));
@@ -201,10 +201,11 @@ test("Feishu private chat sends every commentary in realtime mode", async () => 
   assert.deepEqual(commentaryTexts, ["飞书第一段旁白。", "飞书第二段旁白。", "飞书第三段旁白。"]);
 });
 
-test("Feishu trusted private chat can toggle group receive at runtime", async () => {
+test("Feishu trusted private chat cannot enable group receive in the 0.1.5 public release", async () => {
   const factory = new FakeFeishuTransportFactory();
   const channel = new FeishuAdapter({ ...credentials, transportFactory: factory });
   const state = new MemoryStateStore();
+  const setCalls: Array<{ channelId: string; enabled: boolean }> = [];
   state.trustRoute({
     routeKey: "feishu:work:direct:oc_private",
     channelId: "feishu",
@@ -225,6 +226,7 @@ test("Feishu trusted private chat can toggle group receive at runtime", async ()
     cwd: process.cwd(),
     channelCapabilities: {
       setGroupEnabled: (channelId, enabled) => {
+        setCalls.push({ channelId, enabled });
         assert.equal(channelId, "feishu");
         channel.setGroupEnabled(enabled);
         return { ok: true, enabled };
@@ -234,14 +236,16 @@ test("Feishu trusted private chat can toggle group receive at runtime", async ()
 
   await bridge.start();
   await factory.dispatcher.emitReceive(feishuInbound("/group on", "om_group_on"));
-  assert.equal(channel.getCapabilities().group, true);
+  assert.equal(channel.getCapabilities().group, false);
   await factory.dispatcher.emitReceive(feishuInbound("/grop off", "om_grop_off"));
   assert.equal(channel.getCapabilities().group, false);
   await bridge.stop();
 
   const texts = factory.client.sentTexts();
-  assert.ok(texts.some((text) => text.includes("已开启飞书群聊接收")));
-  assert.ok(texts.some((text) => text.includes("已关闭飞书群聊接收")));
+  assert.deepEqual(setCalls, []);
+  assert.equal(texts.filter((text) => text.includes("暂不支持开启群聊接收")).length, 2);
+  assert.equal(texts.some((text) => text.includes("已开启飞书群聊接收")), false);
+  assert.equal(texts.some((text) => text.includes("已关闭飞书群聊接收")), false);
 });
 
 function feishuInbound(text: string, messageId: string) {

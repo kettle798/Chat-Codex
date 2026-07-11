@@ -2,6 +2,7 @@ import type { ChannelMessage, ChannelTarget } from "../../protocol/channel.js";
 import type { MemoryStateStore } from "../../state/memory-state-store.js";
 import type { BridgeChannelCapabilityController } from "../bridge-types.js";
 import type { BridgeDelivery } from "../delivery.js";
+import { FEISHU_GROUP_RECEIVE_DISABLED_TEXT, FEISHU_GROUP_RECEIVE_PUBLICLY_ENABLED } from "../../channels/feishu/feishu-feature-flags.js";
 
 export interface GroupReceiveCommandDeps {
   state: MemoryStateStore;
@@ -18,6 +19,10 @@ export async function handleGroupReceiveCommand(
 ): Promise<void> {
   if (!isFeishuChannelId(message.channelId)) {
     await deps.delivery.sendText(target, "当前渠道不支持 /group on/off。");
+    return;
+  }
+  if (!FEISHU_GROUP_RECEIVE_PUBLICLY_ENABLED) {
+    await deps.delivery.sendText(target, FEISHU_GROUP_RECEIVE_DISABLED_TEXT);
     return;
   }
   if (message.conversation.kind !== "direct") {

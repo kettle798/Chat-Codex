@@ -261,16 +261,12 @@ test("FeishuAdapter ignores private sender display names from event fields witho
   assert.equal(factory.client.userGetPayloads.length, 0);
 });
 
-test("FeishuAdapter maps group receive events to group ChannelMessage internally", async () => {
+test("FeishuAdapter keeps group receive disabled for the 0.1.5 public release", async () => {
   const factory = new FakeFeishuTransportFactory();
   const adapter = new FeishuAdapter({ ...credentials, transportFactory: factory, groupEnabled: true });
-  let routeKey = "";
-  let conversationKind = "";
-  let text = "";
+  let received = 0;
   adapter.onMessage(async (message) => {
-    routeKey = message.routeKey;
-    conversationKind = message.conversation.kind;
-    text = message.text ?? "";
+    received += 1;
   });
 
   await adapter.start();
@@ -289,27 +285,21 @@ test("FeishuAdapter maps group receive events to group ChannelMessage internally
     },
   }));
 
-  assert.equal(routeKey, "feishu:work:group:oc_group");
-  assert.equal(conversationKind, "group");
-  assert.equal(text, "看一下");
-  assert.equal(adapter.getCapabilities().group, true);
+  assert.equal(received, 0);
+  assert.equal(adapter.getCapabilities().group, false);
+  assert.equal((await adapter.getStatus()).details?.lastSkipReason, "group_disabled");
 });
 
-test("FeishuAdapter downloads group file resources before emitting ChannelMessage", async () => {
+test("FeishuAdapter does not download group file resources while group receive is not public", async () => {
   const factory = new FakeFeishuTransportFactory();
   const uploadRoot = tempDir("codex-feishu-group-upload-");
   const adapter = new FeishuAdapter({ ...credentials, transportFactory: factory, groupEnabled: true, inboundMediaRootDir: uploadRoot });
   const fileBytes = Buffer.from("group report");
   factory.client.resourceBuffers.set("file_group_in_1", fileBytes);
   factory.client.resourceHeaders.set("file_group_in_1", { "content-type": "application/pdf" });
-  let routeKey = "";
-  let localPath = "";
-  let downloadState = "";
-  adapter.onMessage(async (message) => {
-    const attachment = message.attachments?.[0];
-    routeKey = message.routeKey;
-    localPath = attachment?.localPath ?? "";
-    downloadState = attachment?.downloadState ?? "";
+  let received = 0;
+  adapter.onMessage(async () => {
+    received += 1;
   });
 
   await adapter.start();
@@ -329,17 +319,12 @@ test("FeishuAdapter downloads group file resources before emitting ChannelMessag
     },
   }));
 
-  assert.equal(routeKey, "feishu:work:group:oc_group");
-  assert.deepEqual(factory.client.messageResourceGetPayloads[0], {
-    params: { type: "file" },
-    path: { message_id: "om_group_file", file_key: "file_group_in_1" },
-  });
-  assert.equal(downloadState, "available");
-  assert.ok(localPath.startsWith(uploadRoot));
-  assert.deepEqual(fs.readFileSync(localPath), fileBytes);
+  assert.equal(received, 0);
+  assert.equal(factory.client.messageResourceGetPayloads.length, 0);
+  assert.equal((await adapter.getStatus()).details?.lastSkipReason, "group_disabled");
 });
 
-test("FeishuAdapter skips group messages that do not mention the bot", async () => {
+test("FeishuAdapter short-circuits group messages before mention checks while group receive is not public", async () => {
   const factory = new FakeFeishuTransportFactory();
   const uploadRoot = tempDir("codex-feishu-group-upload-");
   const adapter = new FeishuAdapter({ ...credentials, transportFactory: factory, groupEnabled: true, inboundMediaRootDir: uploadRoot });
@@ -385,7 +370,7 @@ test("FeishuAdapter skips group messages that do not mention the bot", async () 
 
   assert.equal(received, 0);
   assert.equal(factory.client.messageResourceGetPayloads.length, 0);
-  assert.equal((await adapter.getStatus()).details?.lastSkipReason, "group_bot_not_mentioned");
+  assert.equal((await adapter.getStatus()).details?.lastSkipReason, "group_disabled");
 });
 
 test("FeishuAdapter skips group receive events while group capability is disabled", async () => {
@@ -431,8 +416,9 @@ test("FeishuAdapter skips group receive events while group capability is disable
     },
   }));
 
-  assert.equal(received, 1);
-  assert.equal(adapter.getCapabilities().group, true);
+  assert.equal(received, 0);
+  assert.equal(adapter.getCapabilities().group, false);
+  assert.equal((await adapter.getStatus()).details?.lastSkipReason, "group_disabled");
 });
 
 test("FeishuAdapter sendText replies to source message first", async () => {

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { FeishuAdapter } from "../../channels/feishu/feishu-adapter.js";
+import { FEISHU_GROUP_RECEIVE_PUBLICLY_ENABLED } from "../../channels/feishu/feishu-feature-flags.js";
 import {
   DEFAULT_FEISHU_ACCOUNT_ID,
   DEFAULT_FEISHU_DOMAIN,
@@ -77,6 +78,9 @@ export class ChannelActions {
   }
 
   setChannelGroupEnabled(id: string, enabled: boolean): ChannelInstanceRecord | undefined {
+    if (enabled && !FEISHU_GROUP_RECEIVE_PUBLICLY_ENABLED) {
+      return this.configStore.setChannelCapabilityOverride(id, "group", false);
+    }
     return this.configStore.setChannelCapabilityOverride(id, "group", enabled);
   }
 
@@ -270,7 +274,7 @@ export function channelDisplayName(record: ChannelInstanceRecord, status?: Chann
 }
 
 export function isChannelGroupReceiveEnabled(record: ChannelInstanceRecord): boolean {
-  return record.capabilityOverrides?.group === true;
+  return FEISHU_GROUP_RECEIVE_PUBLICLY_ENABLED && record.capabilityOverrides?.group === true;
 }
 
 export function formatShortDateTime(iso: string | undefined): string {

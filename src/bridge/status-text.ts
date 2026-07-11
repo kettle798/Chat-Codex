@@ -268,12 +268,6 @@ export class BridgeStatusText {
           "`/context-refresh inherit`: 清除当前聊天覆盖，跟随全局默认。",
         ],
       },
-      ...(isFeishuDirectMessage(message)
-        ? [{
-            command: "/group on|off",
-            description: "开启或关闭当前飞书机器人实例的群聊接收；每个群仍需单独配对。",
-          }]
-        : []),
       ...(isFeishuGroupMessage(message)
         ? [
             {
@@ -451,14 +445,6 @@ export class BridgeStatusText {
     const suffix = policy.progress === "aggregate" ? "（渠道聚合）" : "";
     return `- 进度投递: ${formatProgressModeForStatus(this.progressModeFor(routeKey))}${suffix}`;
   }
-}
-
-function isFeishuDirectMessage(message: ChannelMessage | undefined): boolean {
-  if (!message || message.conversation.kind !== "direct") return false;
-  return message.channelId === "feishu"
-    || message.channelId.startsWith("feishu-")
-    || message.channelId === "lark"
-    || message.channelId.startsWith("lark-");
 }
 
 function isFeishuGroupMessage(message: ChannelMessage | undefined): boolean {

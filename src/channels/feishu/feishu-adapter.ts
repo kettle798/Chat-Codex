@@ -33,6 +33,7 @@ import {
   missingFeishuCredentials,
   normalizeFeishuCredentials,
 } from "./feishu-message.js";
+import { FEISHU_GROUP_RECEIVE_PUBLICLY_ENABLED } from "./feishu-feature-flags.js";
 import {
   downloadFeishuInboundAttachments,
   feishuFileTypeForName,
@@ -105,7 +106,7 @@ export class FeishuAdapter implements ChannelAdapter {
     this.probeOnStart = options.probeOnStart ?? true;
     this.staleMessageMs = options.staleMessageMs ?? DEFAULT_FEISHU_STALE_MESSAGE_MS;
     this.dedupTtlMs = options.dedupTtlMs ?? DEFAULT_DEDUP_TTL_MS;
-    this.groupEnabled = options.groupEnabled ?? false;
+    this.groupEnabled = FEISHU_GROUP_RECEIVE_PUBLICLY_ENABLED && (options.groupEnabled ?? false);
     this.transportFactory = options.transportFactory ?? new DefaultFeishuTransportFactory();
     this.now = options.now ?? Date.now;
     this.inboundMediaRootDir = options.inboundMediaRootDir;
@@ -231,10 +232,10 @@ export class FeishuAdapter implements ChannelAdapter {
   }
 
   setGroupEnabled(enabled: boolean): void {
-    this.groupEnabled = enabled;
+    this.groupEnabled = FEISHU_GROUP_RECEIVE_PUBLICLY_ENABLED && enabled;
     this.status = {
       ...this.status,
-      details: this.statusDetails(enabled ? "group-enabled" : "group-disabled"),
+      details: this.statusDetails(this.groupEnabled ? "group-enabled" : "group-disabled"),
     };
   }
 

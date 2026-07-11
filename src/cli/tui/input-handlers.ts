@@ -230,10 +230,9 @@ async function handleChannelsInput(context: TuiInputContext, input: string, ente
 
 async function handleChannelDetailInput(context: TuiInputContext, input: string, enter: boolean, record: LauncherDashboard["channels"][number]["record"]): Promise<void> {
   const { actions, channels, selected, setScreen, refresh, tuiActions } = context;
-  const isFeishu = record.type === "feishu" || record.type === "lark";
-  const picked = numericPick(input, isFeishu ? 6 : 5);
+  const picked = numericPick(input, 5);
   const actionIndex = picked ?? selected;
-  const explicitAction = enter || picked !== undefined || input === "b" || input === "c" || input === "e" || input === "g";
+  const explicitAction = enter || picked !== undefined || input === "b" || input === "c" || input === "e";
   if (!explicitAction) return;
   if (input === "e") {
     const updated = await actions.setChannelEnabled(record.id, !record.enabled);
@@ -248,12 +247,7 @@ async function handleChannelDetailInput(context: TuiInputContext, input: string,
     setScreen({ name: "addFeishu", step: "appId", values: feishuCredentialDefaults() });
     return;
   }
-  if (isFeishu && (input === "g" || actionIndex === 1)) {
-    const channel = channels.find((item) => item.record.id === record.id);
-    if (channel) tuiActions.confirmToggleGroupReceive(channel);
-    return;
-  }
-  const shiftedActionIndex = isFeishu ? actionIndex - 1 : actionIndex;
+  const shiftedActionIndex = actionIndex;
   if (shiftedActionIndex === 1) {
     tuiActions.openRenameChannel(record.id);
     return;

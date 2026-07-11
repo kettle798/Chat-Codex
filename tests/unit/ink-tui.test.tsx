@@ -148,7 +148,7 @@ test("Ink TUI exposes add channel actions when channels already exist", async ()
   view.unmount();
 });
 
-test("Ink TUI toggles Feishu group receive from channel detail", async () => {
+test("Ink TUI hides Feishu group receive from channel detail for the public release", async () => {
   const dashboard = dashboardFixture();
   const toggles: Array<{ channelId: string; enabled: boolean }> = [];
   const view = render(<ChatCodexTui actions={mockActions(dashboard, {
@@ -171,19 +171,13 @@ test("Ink TUI toggles Feishu group receive from channel detail", async () => {
   view.stdin.write("\r");
   await waitForInk();
   assert.match(cleanFrame(view), /渠道详情/);
-  assert.match(cleanFrame(view), /群聊接收\s+关闭/);
-  assert.match(cleanFrame(view), /开启群聊接收/);
+  assert.doesNotMatch(cleanFrame(view), /群聊接收\s+关闭/);
+  assert.doesNotMatch(cleanFrame(view), /开启群聊接收/);
 
   view.stdin.write("g");
   await waitForInk();
-  assert.match(cleanFrame(view), /确认开启/);
-  view.stdin.write("y");
-  await waitForInk();
-  await waitForInk();
-
-  assert.deepEqual(toggles, [{ channelId: "feishu-default", enabled: true }]);
-  assert.match(cleanFrame(view), /群聊接收\s+开启/);
-  assert.match(cleanFrame(view), /关闭群聊接收/);
+  assert.doesNotMatch(cleanFrame(view), /确认开启/);
+  assert.deepEqual(toggles, []);
 
   view.unmount();
 });
