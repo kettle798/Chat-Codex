@@ -230,7 +230,8 @@ export function formatCodexSettingsMenu(input: ServeCodexSummary & { cwd: string
     `当前: ${formatPermissionModeForUser(input.permissionMode)}`,
     "",
     "1. 审批模式（workspace-write 沙箱，推荐）",
-    "2. 完全权限（跳过审批和沙箱，高风险）",
+    "2. Approve for me（自动审阅，workspace-write 沙箱）",
+    "3. 完全权限（跳过审批和沙箱，高风险）",
     "0. 返回",
   ].join("\n");
 }
@@ -356,6 +357,7 @@ export function formatAdapterModeForUser(adapterMode: ServeCodexSummary["adapter
 
 export function formatPermissionModeForUser(permissionMode: CodexPermissionMode): string {
   if (permissionMode === "full") return "完全权限（跳过审批和沙箱，风险高）";
+  if (permissionMode === "approve-for-me") return "Approve for me（自动审阅，workspace-write 沙箱）";
   return "审批模式（workspace-write 沙箱，推荐）";
 }
 

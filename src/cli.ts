@@ -158,8 +158,8 @@ function parseStartupOptions(args: string[]): StartupOptions {
       options.session = args[++index];
     } else if (arg === "--permission") {
       const value = args[++index];
-      if (value !== "approval" && value !== "full") {
-        throw new Error("--permission 只能是 approval 或 full");
+      if (value !== "approval" && value !== "approve-for-me" && value !== "full") {
+        throw new Error("--permission 只能是 approval、approve-for-me 或 full");
       }
       options.permission = value;
     } else if (arg === "--codex-adapter" || arg === "--adapter") {
@@ -251,7 +251,7 @@ async function prepareCodexStartup(
     const permissionMode = await resolvePermissionMode(options, rl);
     const policy: CodexRunPolicy = {
       permissionMode,
-      sandbox: permissionMode === "approval" ? "workspace-write" : undefined,
+      sandbox: permissionMode === "full" ? undefined : "workspace-write",
     };
     printStartupSelection({
       sessionId: sessionChoice.sessionId,
@@ -283,14 +283,19 @@ async function resolvePermissionMode(options: StartupOptions, rl?: Interface): P
     await confirmFullPermission(rl, Boolean(options.yesDangerouslyFull));
     return "full";
   }
+  if (options.permission === "approve-for-me") return "approve-for-me";
   if (options.permission === "approval") return "approval";
   if (!rl) return "approval";
   console.log("");
   console.log("Codex 权限模式（作用于本次启动后的后续任务）");
   console.log("1. 审批模式 - 使用 workspace-write 沙箱；app-server 可把审批推送到微信 /OK 或 /NO");
-  console.log("2. 完全权限 - 跳过审批和沙箱，非常危险");
+  console.log("2. Approve for me - 使用 workspace-write 沙箱；Codex 自动审阅审批请求");
+  console.log("3. 完全权限 - 跳过审批和沙箱，非常危险");
   const answer = (await rl.question("请选择权限模式 [1]: ")).trim();
-  if (answer === "2" || answer.toLowerCase() === "full") {
+  if (answer === "2" || answer.toLowerCase() === "approve-for-me" || answer.toLowerCase() === "auto") {
+    return "approve-for-me";
+  }
+  if (answer === "3" || answer.toLowerCase() === "full") {
     await confirmFullPermission(rl, false);
     return "full";
   }
@@ -429,6 +434,7 @@ function formatSessionChoice(index: number, session: DiscoveredCodexSession): st
 
 function formatPolicyForCli(policy: CodexRunPolicy): string {
   if (policy.permissionMode === "full") return formatPermissionModeForUser(policy.permissionMode);
+  if (policy.permissionMode === "approve-for-me") return formatPermissionModeForUser(policy.permissionMode);
   return `审批模式（${policy.sandbox ?? "workspace-write"} 沙箱，推荐）`;
 }
 
@@ -443,6 +449,9 @@ function formatProgressForCli(progressMode: ProgressDeliveryMode | undefined, di
 function createRealCodexAdapter(startup: PreparedCodexStartup | { policy?: CodexRunPolicy; adapterMode?: RealCodexAdapterMode; codexStatus?: CodexCliStatus }): CodexAdapter {
   const runPolicy = startup.policy ?? { permissionMode: "approval", sandbox: "workspace-write" };
   if (startup.adapterMode === "exec") {
+    if (runPolicy.permissionMode === "approve-for-me") {
+      throw new Error("Codex exec 不支持 Approve for me，请切换到 app-server 或使用审批模式。");
+    }
     return new ExecCodexAdapter({ runPolicy, codexCommand: startup.codexStatus?.command });
   }
   return new AppServerCodexAdapter({ runPolicy, codexCommand: startup.codexStatus?.command });
@@ -463,7 +472,8 @@ function printHelp(): void {
     "    -v, --version                   输出版本号",
     "    --session new|last|<id>          设置启动时首个微信私聊预设；不会绑定整个微信账号",
     "    --cwd <dir>, --workdir <dir>     设置新会话工作目录；目录不存在会自动创建",
-    "    --permission approval|full       设置安全沙箱或完全权限",
+    "    --permission approval|approve-for-me|full",
+    "                                      设置审批、自动审阅或完全权限",
     "    --codex-adapter app-server|exec  设置 Codex 接入方式；默认 app-server，支持微信审批",
     "    --yes-dangerously-full           非交互确认完全权限",
     "    --progress silent|brief|realtime     设置默认进度投递模式；realtime 仅在渠道策略允许时生效",

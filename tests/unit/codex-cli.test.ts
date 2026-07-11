@@ -15,6 +15,10 @@ test("buildCodexRootArgs maps sandbox and full permission modes to Codex CLI fla
     "--sandbox",
     "workspace-write",
   ]);
+  assert.deepEqual(buildCodexRootArgs({ permissionMode: "approve-for-me", sandbox: "workspace-write" }), [
+    "--sandbox",
+    "workspace-write",
+  ]);
   assert.deepEqual(buildCodexRootArgs({ permissionMode: "full" }), [
     "--dangerously-bypass-approvals-and-sandbox",
   ]);

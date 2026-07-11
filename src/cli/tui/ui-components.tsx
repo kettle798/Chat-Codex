@@ -174,6 +174,7 @@ export function formatSessionWithActivity(session: SessionDisplay): string {
 
 export function formatPermission(policy: CodexRunPolicy): string {
   if (policy.permissionMode === "full") return "完全权限（跳过审批和沙箱，高风险）";
+  if (policy.permissionMode === "approve-for-me") return "Approve for me（自动审阅，workspace-write 沙箱）";
   return `审批模式（${policy.sandbox ?? "workspace-write"} 沙箱）`;
 }
 
@@ -227,7 +228,7 @@ function footerHint(screen: Screen["name"], context?: "firstRun" | "emptyChannel
   if (screen === "addFeishu") return "输入后 Enter 下一步  Secret 不回显  Esc 返回";
   if (screen === "weixinBinding") return "↑↓ 选择  ←/→ 翻页  Enter 执行  数字选本页  n 新建  m 手动输入  0 暂不绑定";
   if (screen === "sessionSelect") return "↑↓ 选择  ←/→ 翻页  Enter 绑定  数字选本页  n 新建  m 手动输入  Esc 返回";
-  if (screen === "permission") return "↑↓ 选择  Enter 保存  完全权限需确认  Esc 返回";
+  if (screen === "permission") return "↑↓ 选择  Enter 保存  自动审阅/完全权限需确认  Esc 返回";
   if (screen === "contextRefresh") return "↑↓ 选择  Enter 保存  Esc 返回";
   if (screen === "workdir") return "↑↓ 选择  Enter 保存  1/d 当前目录  2/m 输入路径  Esc 返回";
   if (screen === "workdirInput") return "输入后 Enter 保存  Esc 返回";

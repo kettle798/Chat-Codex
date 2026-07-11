@@ -1,4 +1,4 @@
-import type { CodexSession, CodexSessionStatus } from "../codex/types.js";
+import type { CodexNotificationKind, CodexSession, CodexSessionStatus } from "../codex/types.js";
 import type { CodexRunPolicy } from "../codex/codex-cli.js";
 import type { ChannelMessage } from "../protocol/channel.js";
 import { SessionBindings, type ActivateSessionResult, type ClaimSessionResult, type SessionBinding, type SessionOwner, type TransferSessionOwnerResult, type UnbindSessionResult } from "./session-bindings.js";
@@ -29,6 +29,14 @@ export interface StoredSession {
   lastError?: string;
 }
 
+export interface RecentCodexNotificationRecord {
+  sessionId: string;
+  method: string;
+  kind: CodexNotificationKind;
+  text: string;
+  occurredAt: string;
+}
+
 export function pendingBindingOwnerRouteKey(id: string): string {
   return `pending:${id}`;
 }
@@ -41,6 +49,7 @@ export class MemoryStateStore {
   private readonly groupAccess = new Map<string, GroupAccessRecord>();
   private readonly routeContextRefreshPolicies = new Map<string, ContextRefreshPolicy>();
   private readonly sessionContextSnapshots = new Map<string, SessionContextSnapshotRecord>();
+  private readonly recentCodexNotifications = new Map<string, RecentCodexNotificationRecord[]>();
 
   constructor(
     readonly sessionBindings = new SessionBindings(),
@@ -211,6 +220,31 @@ export class MemoryStateStore {
       updatedAt: new Date().toISOString(),
       lastError: status.type === "failed" ? status.error : stored.lastError,
     });
+  }
+
+  recordCodexNotification(input: {
+    sessionId: string;
+    method: string;
+    kind: CodexNotificationKind;
+    text: string;
+    occurredAt?: string;
+  }): RecentCodexNotificationRecord {
+    const record: RecentCodexNotificationRecord = {
+      sessionId: input.sessionId,
+      method: input.method,
+      kind: input.kind,
+      text: input.text,
+      occurredAt: input.occurredAt ?? new Date().toISOString(),
+    };
+    const existing = this.recentCodexNotifications.get(input.sessionId) ?? [];
+    this.recentCodexNotifications.set(input.sessionId, [record, ...existing].slice(0, 5));
+    return { ...record };
+  }
+
+  listRecentCodexNotifications(sessionId: string, limit = 2): RecentCodexNotificationRecord[] {
+    return (this.recentCodexNotifications.get(sessionId) ?? [])
+      .slice(0, Math.max(0, limit))
+      .map((record) => ({ ...record }));
   }
 
   getSessionRunPolicy(sessionId: string): CodexRunPolicy | undefined {

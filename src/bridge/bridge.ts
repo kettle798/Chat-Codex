@@ -286,6 +286,8 @@ export class Bridge {
         }, message, target, args, rawText),
         status: (message) => this.statusTextRenderer.statusText(message),
         sessions: (message, args, commandName) => this.statusTextRenderer.sessionsText(message, args, commandName),
+        sessionDetail: (message, sessionId) => this.statusTextRenderer.sessionDetailText(message, sessionId),
+        sessionsCwd: (message, target) => this.sessionFlow.beginSessionCwdSelection(message, target),
         resumeOrUseSession: (message, target, sessionRef) => this.sessionFlow.resumeOrUseSession(message, target, sessionRef),
         cancel: (message, target) => handleCancelCommand({
           sessionFlow: this.sessionFlow,
@@ -456,6 +458,10 @@ export class Bridge {
     }
     if (!text && attachments.usable.length > 0) {
       await this.addPendingMedia(message, target, attachments.usable);
+      return;
+    }
+    if (this.sessionFlow.hasSessionCwdSelection(message.routeKey)) {
+      await this.sessionFlow.handleSessionCwdSelectionReply(message, target, text);
       return;
     }
     if (this.sessionFlow.hasSessionSelection(message.routeKey)) {

@@ -13,6 +13,7 @@ import type {
   CodexProgressKind,
   CodexRunPolicyStatus,
   CodexSession,
+  CodexSessionDetail,
   CodexSessionReloadResult,
   CodexSessionStatus,
   CodexSessionSummary,
@@ -30,6 +31,7 @@ import { goalFromResponse, goalFromSetResponse } from "./app-server/goal-api.js"
 import { appServerUserInput } from "./app-server/input-mapper.js";
 import { appServerErrorMessage, isTransientAppServerError } from "./app-server/notification-mapper.js";
 import { unsupportedServerRequestResponse, userInputRequestFromServerRequest } from "./app-server/server-request-mapper.js";
+import { mergeSessionSummaries, sessionDetailFromThread, sessionSummaryFromThread } from "./app-server/thread-list.js";
 import {
   cloneModelPolicy,
   modelInfoFromResponse,
@@ -50,7 +52,7 @@ import { collaborationModePayload, truncatePrompt, withContext, withModelPolicy 
 import { AppServerTurnController } from "./app-server/turn-controller.js";
 import type { JsonRpcNotification, JsonRpcRequest, PendingServerApproval, PendingServerUserInput } from "./app-server/types.js";
 import { AsyncEventQueue } from "./app-server/turn-store.js";
-import { isoFromSeconds, numberValue, objectValue, objectValueOrNull, stringValue } from "./app-server/value-parsers.js";
+import { arrayValue, isoFromSeconds, numberValue, objectValue, objectValueOrNull, stringValue } from "./app-server/value-parsers.js";
 
 export interface AppServerCodexAdapterOptions {
   codexBin?: string;
@@ -353,7 +355,40 @@ export class AppServerCodexAdapter implements CodexAdapter {
   }
 
   async listSessions(routeKey?: string): Promise<CodexSessionSummary[]> {
-    return this.sessionStore.listSessions(routeKey, this.codexHome);
+    if (routeKey) return this.sessionStore.listSessions(routeKey, this.codexHome);
+    const runtimeSessions = this.sessionStore.listRuntimeSessions();
+    const appServerSessions = await this.listSessionsFromThreadList().catch(() => undefined);
+    if (appServerSessions) return mergeSessionSummaries(runtimeSessions, appServerSessions);
+    return this.sessionStore.listSessions(undefined, this.codexHome);
+  }
+
+  async getSessionDetail(sessionId: string): Promise<CodexSessionDetail | undefined> {
+    await this.ensureStarted();
+    const response = await this.request<Record<string, unknown>>("thread/read", {
+      threadId: sessionId,
+      includeTurns: false,
+    });
+    return sessionDetailFromThread(objectValue(response.thread));
+  }
+
+  private async listSessionsFromThreadList(): Promise<CodexSessionSummary[]> {
+    await this.ensureStarted();
+    const response = await this.request<Record<string, unknown>>("thread/list", {
+      limit: 100,
+      sortKey: "recency_at",
+      sortDirection: "desc",
+      archived: false,
+      useStateDbOnly: false,
+    }).catch(async () => this.request<Record<string, unknown>>("thread/list", {
+      limit: 100,
+      sortKey: "updated_at",
+      sortDirection: "desc",
+      archived: false,
+      useStateDbOnly: false,
+    }));
+    return arrayValue(response.data)
+      .map((thread) => sessionSummaryFromThread(objectValue(thread)))
+      .filter((session): session is CodexSessionSummary => Boolean(session));
   }
 
   async resolveApproval(approvalKey: string, decision: ApprovalDecision): Promise<void> {
@@ -394,6 +429,9 @@ export class AppServerCodexAdapter implements CodexAdapter {
       policy: cloneRunPolicy(policy),
       interactiveApprovals: policy.permissionMode !== "full",
       effectiveApprovalPolicy: policy.permissionMode === "full" ? "never" : "on-request",
+      effectiveApprovalsReviewer: approvalsReviewerForRunPolicy(policy),
+      effectiveSandbox: sandboxModeForRunPolicy(policy),
+      supportedPermissionModes: ["approval", "approve-for-me", "full"],
       note: "codex app-server 会把审批请求回调给中间件，可通过微信 /OK、/P 或 /NO 处理。",
     };
   }
@@ -666,22 +704,35 @@ export class AppServerCodexAdapter implements CodexAdapter {
       }
       return;
     }
-    if ((notification.method === "thread/archived" || notification.method === "thread/closed") && sessionId) {
+    if ((notification.method === "thread/archived" || notification.method === "thread/closed" || notification.method === "thread/deleted") && sessionId) {
       const stored = this.sessionStore.get(sessionId);
       if (stored) {
-        const detail = notification.method === "thread/archived" ? "thread archived" : "thread closed";
+        const detail = notification.method === "thread/archived"
+          ? "thread archived"
+          : notification.method === "thread/deleted"
+            ? "thread deleted"
+            : "thread closed";
         stored.status = withContext(stored, { type: "unknown", detail });
         stored.currentTurnId = undefined;
         stored.updatedAt = new Date().toISOString();
       }
+      const lifecycle = notification.method === "thread/archived"
+        ? "archived"
+        : notification.method === "thread/deleted"
+          ? "deleted"
+          : "closed";
       this.emitCodexNotification({
         method: notification.method,
         sessionId,
         turnId: this.notificationTurnId(sessionId, params, notification.method),
         kind: "lifecycle",
-        lifecycle: notification.method === "thread/archived" ? "archived" : "closed",
+        lifecycle,
         unbindRoute: true,
-        text: notification.method === "thread/archived" ? "Codex thread archived." : "Codex thread closed.",
+        text: notification.method === "thread/archived"
+          ? "Codex thread archived."
+          : notification.method === "thread/deleted"
+            ? "Codex thread deleted."
+            : "Codex thread closed.",
         dedupeWindowMs: 10 * 60_000,
       });
       return;
@@ -732,6 +783,32 @@ export class AppServerCodexAdapter implements CodexAdapter {
           dedupeWindowMs: 10 * 60_000,
         });
       }
+      return;
+    }
+    if (notification.method === "model/safetyBuffering/updated" && sessionId) {
+      if (params.showBufferingUi !== true) return;
+      const model = stringValue(params.model);
+      const fasterModel = stringValue(params.fasterModel);
+      const useCases = arrayValue(params.useCases)
+        .map((value) => stringValue(value))
+        .filter((value): value is string => Boolean(value));
+      const reasons = arrayValue(params.reasons)
+        .map((value) => stringValue(value))
+        .filter((value): value is string => Boolean(value));
+      this.emitCodexNotification({
+        method: notification.method,
+        sessionId,
+        turnId: stringValue(params.turnId),
+        kind: "model",
+        text: [
+          "Codex 正在等待模型安全缓冲完成，回复可能会变慢。",
+          model ? `Model: ${model}` : undefined,
+          useCases.length > 0 ? `Use cases: ${useCases.join(", ")}` : undefined,
+          reasons.length > 0 ? `Reasons: ${reasons.join(", ")}` : undefined,
+          fasterModel ? `Faster model suggestion: ${fasterModel}` : undefined,
+        ].filter(Boolean).join("\n"),
+        dedupeWindowMs: 5 * 60_000,
+      });
       return;
     }
     const warning = notificationText(notification.method, params);
@@ -949,7 +1026,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
     kind: "security" | "warning" | "model" | "config" | "lifecycle" | "deprecation";
     text: string;
     dedupeWindowMs: number;
-    lifecycle?: "archived" | "closed" | "unarchived";
+    lifecycle?: "archived" | "closed" | "deleted" | "unarchived";
     unbindRoute?: boolean;
   }): void {
     const stored = this.sessionStore.get(notification.sessionId);

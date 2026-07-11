@@ -256,6 +256,7 @@ function kindLabel(kind: RuntimeLogKind): string {
 
 function formatPolicy(policy: CodexRunPolicy): string {
   if (policy.permissionMode === "full") return "完全权限";
+  if (policy.permissionMode === "approve-for-me") return "Approve for me";
   return `审批模式（${policy.sandbox ?? "workspace-write"} 沙箱）`;
 }
 

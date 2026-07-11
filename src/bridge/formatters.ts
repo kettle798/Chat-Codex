@@ -242,15 +242,25 @@ function formatStatusDetailForUser(detail: string): string {
 }
 
 export function formatRunPolicy(policy: CodexRunPolicy): string {
-  return policy.permissionMode === "full"
-    ? "full"
-    : `approval sandbox=${policy.sandbox ?? "workspace-write"}`;
+  switch (policy.permissionMode) {
+    case "full":
+      return "full";
+    case "approve-for-me":
+      return `approve-for-me sandbox=${policy.sandbox ?? "workspace-write"}`;
+    case "approval":
+      return `approval sandbox=${policy.sandbox ?? "workspace-write"}`;
+  }
 }
 
 export function formatRunPolicyForStatus(policy: CodexRunPolicy): string {
-  return policy.permissionMode === "full"
-    ? "完全权限（跳过审批和沙箱）"
-    : `审批模式（沙箱 \`${policy.sandbox ?? "workspace-write"}\`）`;
+  switch (policy.permissionMode) {
+    case "full":
+      return "完全权限（跳过审批和沙箱）";
+    case "approve-for-me":
+      return `Approve for me（自动审阅，沙箱 \`${policy.sandbox ?? "workspace-write"}\`）`;
+    case "approval":
+      return `审批模式（沙箱 \`${policy.sandbox ?? "workspace-write"}\`）`;
+  }
 }
 
 export function formatGoalStatusLines(goal: CodexGoal | null | undefined): string[] {
@@ -271,6 +281,8 @@ export function formatGoalStatus(status: CodexGoalStatus): string {
   switch (status) {
     case "active": return "active";
     case "paused": return "paused";
+    case "blocked": return "blocked";
+    case "usageLimited": return "usage-limited";
     case "budgetLimited": return "budget-limited";
     case "complete": return "complete";
   }
@@ -280,14 +292,17 @@ function formatGoalStatusForUser(status: CodexGoalStatus): string {
   switch (status) {
     case "active": return "进行中";
     case "paused": return "已暂停";
+    case "blocked": return "已阻塞";
+    case "usageLimited": return "已达用量限制";
     case "budgetLimited": return "已达预算";
     case "complete": return "已完成";
   }
 }
 
 export function formatApprovalSupport(status: CodexRunPolicyStatus): string {
+  const reviewer = status.effectiveApprovalsReviewer ? `，审批人 ${status.effectiveApprovalsReviewer}` : "";
   if (status.interactiveApprovals) {
-    return status.effectiveApprovalPolicy ? `支持微信内审批（实际策略 ${status.effectiveApprovalPolicy}）` : "支持微信内审批";
+    return status.effectiveApprovalPolicy ? `支持微信内审批（实际策略 ${status.effectiveApprovalPolicy}${reviewer}）` : "支持微信内审批";
   }
   return status.effectiveApprovalPolicy ? `不支持微信内审批（实际策略 ${status.effectiveApprovalPolicy}）` : "不支持微信内审批";
 }
@@ -380,13 +395,15 @@ function isEffortKeyword(value: string): boolean {
 
 export function parseReasoningEffort(value: string): CodexReasoningEffort | undefined {
   const normalized = value.trim().toLowerCase();
-  return (CODEX_REASONING_EFFORTS as readonly string[]).includes(normalized)
-    ? normalized as CodexReasoningEffort
-    : undefined;
+  return /^[a-z][a-z0-9_-]{0,63}$/.test(normalized) ? normalized : undefined;
 }
 
 export function invalidReasoningEffortText(value: string): string {
-  return `未知思考程度: \`${value}\`\n可用值: ${CODEX_REASONING_EFFORTS.map((effort) => `\`${effort}\``).join(", ")}。`;
+  return [
+    `思考程度格式不合法: \`${value}\``,
+    `常见值: ${CODEX_REASONING_EFFORTS.map((effort) => `\`${effort}\``).join(", ")}。`,
+    "实际可用值以当前模型返回的 supported efforts 为准。",
+  ].join("\n");
 }
 
 export function modelSupportsEffort(model: CodexModelOption, effort: CodexReasoningEffort): boolean {
@@ -460,8 +477,12 @@ export function formatModelOptionLine(model: CodexModelOption, index: number): s
   const id = model.id !== model.model ? ` id=\`${model.id}\`` : "";
   const efforts = supportedEfforts(model).map((effort) => `\`${effort}\``).join(", ") || "`default`";
   const defaultEffort = model.defaultReasoningEffort ? ` default=\`${model.defaultReasoningEffort}\`` : "";
+  const serviceTiers = model.serviceTiers?.map((tier) => tier.id).filter(Boolean).join(", ");
+  const tierText = serviceTiers ? `; tiers: ${serviceTiers}${model.defaultServiceTier ? ` defaultTier=\`${model.defaultServiceTier}\`` : ""}` : "";
+  const inputText = model.inputModalities?.length ? `; input: ${model.inputModalities.join(",")}` : "";
+  const personalityText = model.supportsPersonality ? "; personality" : "";
   const suffix = badges ? ` (${badges})` : "";
-  return `${index + 1}. \`${model.model}\`${id}${suffix} - ${model.displayName}; efforts: ${efforts}${defaultEffort}`;
+  return `${index + 1}. \`${model.model}\`${id}${suffix} - ${model.displayName}; efforts: ${efforts}${defaultEffort}${tierText}${inputText}${personalityText}`;
 }
 
 function formatModelCandidate(model: CodexModelOption): string {

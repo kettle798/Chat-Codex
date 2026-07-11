@@ -234,10 +234,14 @@ export class ExecCodexAdapter implements CodexAdapter {
   }
 
   getRunPolicyStatus(sessionId?: string): CodexRunPolicyStatus {
+    const policy = this.getRunPolicy(sessionId);
     return {
-      policy: this.getRunPolicy(sessionId),
+      policy,
       interactiveApprovals: false,
       effectiveApprovalPolicy: "never",
+      effectiveApprovalsReviewer: null,
+      effectiveSandbox: policy.permissionMode === "full" ? "danger-full-access" : policy.sandbox ?? "workspace-write",
+      supportedPermissionModes: ["approval", "full"],
       note: "codex exec 是非交互模式，不会把审批请求回调给微信；approval 只恢复 workspace-write sandbox。",
     };
   }

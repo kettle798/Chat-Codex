@@ -70,6 +70,7 @@ test("serve prompt helpers trim input and honor back shortcuts", async () => {
 
 test("serve formatters keep session and permission display stable", () => {
   assert.equal(formatPolicyForCli({ permissionMode: "approval", sandbox: "workspace-write" }), "审批模式（workspace-write 沙箱，推荐）");
+  assert.equal(formatPolicyForCli({ permissionMode: "approve-for-me", sandbox: "workspace-write" }), "Approve for me（自动审阅，workspace-write 沙箱）");
   assert.equal(formatPolicyForCli({ permissionMode: "full" }), "完全权限（跳过审批和沙箱，风险高）");
   const rendered = formatSessionChoice(2, {
     id: "session-123",

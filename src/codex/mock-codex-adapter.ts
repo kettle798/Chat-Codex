@@ -13,6 +13,7 @@ import type {
   CodexRunPolicyStatus,
   CodexSession,
   CodexSessionBaseStatus,
+  CodexSessionDetail,
   CodexSessionModelInfo,
   CodexSessionReloadResult,
   CodexSessionStatus,
@@ -141,6 +142,29 @@ export class MockCodexAdapter implements CodexAdapter {
       }));
   }
 
+  async getSessionDetail(sessionId: string): Promise<CodexSessionDetail | undefined> {
+    const stored = this.sessions.get(sessionId);
+    if (!stored) return undefined;
+    const updatedAt = new Date().toISOString();
+    return {
+      id: stored.session.id,
+      sessionId: stored.session.id,
+      threadId: stored.session.id,
+      title: stored.session.title,
+      preview: `Mock preview for ${stored.session.id}`,
+      cwd: stored.session.cwd,
+      status: stored.status,
+      createdAt: stored.session.createdAt,
+      updatedAt,
+      recencyAt: updatedAt,
+      source: "mock",
+      modelProvider: "mock",
+      cliVersion: "mock",
+      routeKey: stored.routeKey,
+      ephemeral: false,
+    };
+  }
+
   async resolveApproval(approvalKey: string, decision: ApprovalDecision): Promise<void> {
     this.resolvedApprovals.push({
       approvalKey,
@@ -164,8 +188,11 @@ export class MockCodexAdapter implements CodexAdapter {
     const policy = this.runPolicyForSession(sessionId);
     return {
       policy: { ...policy },
-      interactiveApprovals: true,
+      interactiveApprovals: policy.permissionMode !== "full",
       effectiveApprovalPolicy: policy.permissionMode === "full" ? "never" : "on-request",
+      effectiveApprovalsReviewer: policy.permissionMode === "approve-for-me" ? "auto_review" : policy.permissionMode === "full" ? null : "user",
+      effectiveSandbox: policy.permissionMode === "full" ? "danger-full-access" : policy.sandbox ?? "workspace-write",
+      supportedPermissionModes: ["approval", "approve-for-me", "full"],
     };
   }
 
@@ -308,9 +335,13 @@ const MOCK_MODELS: CodexModelOption[] = [
       { reasoningEffort: "medium" },
       { reasoningEffort: "high" },
       { reasoningEffort: "xhigh" },
+      { reasoningEffort: "max" },
     ],
     defaultReasoningEffort: "high",
     serviceTiers: [{ id: "default", name: "Default" }],
+    defaultServiceTier: "default",
+    inputModalities: ["text", "image"],
+    supportsPersonality: true,
   },
   {
     id: "gpt-hidden",

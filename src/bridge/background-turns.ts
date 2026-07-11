@@ -285,7 +285,11 @@ function currentStartedAt(status: CodexSessionStatus | undefined): string | unde
 }
 
 function isTerminalLifecycleStatus(status: CodexSessionStatus | undefined): boolean {
-  return status?.type === "unknown" && (status.detail === "thread archived" || status.detail === "thread closed");
+  return status?.type === "unknown" && (
+    status.detail === "thread archived"
+    || status.detail === "thread closed"
+    || status.detail === "thread deleted"
+  );
 }
 
 function targetWithTurnRunId(target: ChannelTarget, turnId: string): ChannelTarget {

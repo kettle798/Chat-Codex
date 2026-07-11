@@ -35,6 +35,7 @@ test("TUI navigation maxSelectableIndex keeps screen-specific action counts", ()
   assert.equal(maxSelectableIndex({ name: "channelDetail", channelId: "feishu-1" }, channels, 0), 5);
   assert.equal(maxSelectableIndex({ name: "contextRefresh", target: { kind: "default" } }, channels, 0), 2);
   assert.equal(maxSelectableIndex({ name: "contextRefresh", target: { kind: "route", routeKey: "route" } }, channels, 0), 3);
+  assert.equal(maxSelectableIndex({ name: "permission", target: { kind: "default" } }, channels, 0), 2);
 });
 
 test("TUI navigation maps context refresh rows to modes", () => {

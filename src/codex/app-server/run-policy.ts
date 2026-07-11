@@ -8,8 +8,10 @@ export function approvalPolicyForRunPolicy(policy: CodexRunPolicy): "on-request"
   return policy.permissionMode === "full" ? "never" : "on-request";
 }
 
-export function approvalsReviewerForRunPolicy(policy: CodexRunPolicy): "user" | null {
-  return policy.permissionMode === "full" ? null : "user";
+export function approvalsReviewerForRunPolicy(policy: CodexRunPolicy): "user" | "auto_review" | null {
+  if (policy.permissionMode === "full") return null;
+  if (policy.permissionMode === "approve-for-me") return "auto_review";
+  return "user";
 }
 
 export function sandboxModeForRunPolicy(policy: CodexRunPolicy): CodexSandboxMode {

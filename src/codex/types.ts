@@ -5,9 +5,9 @@ import type { CodexPromptInput } from "./input.js";
 export type { CodexRunPolicy, CodexRunPolicyStatus } from "./codex-cli.js";
 export type { CodexInputItem, CodexPromptInput, CodexTurnInput } from "./input.js";
 
-export const CODEX_REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
+export const CODEX_REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
 
-export type CodexReasoningEffort = typeof CODEX_REASONING_EFFORTS[number];
+export type CodexReasoningEffort = string;
 
 export const CODEX_COLLABORATION_MODES = ["default", "plan"] as const;
 
@@ -17,7 +17,7 @@ export interface CodexRunOptions {
   collaborationMode?: CodexCollaborationMode;
 }
 
-export const CODEX_GOAL_STATUSES = ["active", "paused", "budgetLimited", "complete"] as const;
+export const CODEX_GOAL_STATUSES = ["active", "paused", "blocked", "usageLimited", "budgetLimited", "complete"] as const;
 
 export type CodexGoalStatus = typeof CODEX_GOAL_STATUSES[number];
 
@@ -76,10 +76,16 @@ export interface CodexModelOption {
   model: string;
   displayName: string;
   description?: string;
+  upgrade?: string | null;
+  upgradeInfo?: unknown;
+  availabilityNux?: unknown;
   hidden: boolean;
   supportedReasoningEfforts: CodexReasoningEffortOption[];
   defaultReasoningEffort?: CodexReasoningEffort;
+  inputModalities?: string[];
+  supportsPersonality?: boolean;
   serviceTiers?: CodexModelServiceTier[];
+  defaultServiceTier?: string | null;
   isDefault?: boolean;
 }
 
@@ -112,11 +118,13 @@ export type CodexNotificationKind =
   | "model"
   | "config"
   | "lifecycle"
-  | "deprecation";
+  | "deprecation"
+  | "connection";
 
 export type CodexThreadLifecycleNotification =
   | "archived"
   | "closed"
+  | "deleted"
   | "unarchived";
 
 export interface CodexNotification {
@@ -209,6 +217,30 @@ export interface CodexSessionSummary {
   updatedAt: string;
 }
 
+export interface CodexSessionGitInfo {
+  root?: string;
+  branch?: string;
+  sha?: string;
+  originUrl?: string;
+}
+
+export interface CodexSessionDetail extends CodexSessionSummary {
+  sessionId?: string;
+  threadId?: string;
+  preview?: string;
+  createdAt?: string;
+  recencyAt?: string;
+  source?: string;
+  threadSource?: string;
+  modelProvider?: string;
+  cliVersion?: string;
+  path?: string;
+  gitInfo?: CodexSessionGitInfo;
+  forkedFromId?: string;
+  parentThreadId?: string;
+  ephemeral?: boolean;
+}
+
 export interface CodexSessionReloadResult {
   session: CodexSession;
   reloadedAt: string;
@@ -234,6 +266,7 @@ export interface CodexAdapter {
   cancel?(sessionId: string): Promise<void>;
   getStatus(sessionId: string): Promise<CodexSessionStatus>;
   listSessions(routeKey?: string): Promise<CodexSessionSummary[]>;
+  getSessionDetail?(sessionId: string): Promise<CodexSessionDetail | undefined>;
   resolveApproval?(approvalKey: string, decision: ApprovalDecision): Promise<void>;
   resolveUserInput?(requestId: string, response: CodexUserInputResponse): Promise<void>;
   getRunPolicy?(sessionId?: string): CodexRunPolicy;

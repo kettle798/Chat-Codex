@@ -501,12 +501,24 @@ async function handleSessionSelectInput(context: TuiInputContext, input: string,
 
 async function handlePermissionInput(context: TuiInputContext, input: string, enter: boolean, target: PermissionTarget): Promise<void> {
   const { selected, setConfirm, tuiActions } = context;
-  const pick = numericPick(input, 2);
+  const pick = numericPick(input, 3);
   const index = pick ?? selected;
   if (!enter && pick === undefined) return;
-  const policy: CodexRunPolicy = index === 1
+  const policy: CodexRunPolicy = index === 2
     ? { permissionMode: "full" }
-    : { permissionMode: "approval", sandbox: "workspace-write" };
+    : index === 1
+      ? { permissionMode: "approve-for-me", sandbox: "workspace-write" }
+      : { permissionMode: "approval", sandbox: "workspace-write" };
+  if (policy.permissionMode === "approve-for-me") {
+    setConfirm({
+      message: "Approve for me 会让 Codex 自动审阅审批请求，不等于完全权限。按 y 确认，按 n 取消。",
+      yes: async () => {
+        setConfirm(undefined);
+        await tuiActions.savePermission(target, policy);
+      },
+    });
+    return;
+  }
   if (policy.permissionMode === "full") {
     setConfirm({
       message: "完全权限会跳过审批和沙箱，可以直接执行命令并修改文件。按 y 确认，按 n 取消。",

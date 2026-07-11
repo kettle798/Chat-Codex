@@ -84,6 +84,22 @@ test("BridgeCommandRouter lets context refresh status dispatch while busy", asyn
   assert.equal(fixture.calls.contextRefresh, 1);
 });
 
+test("BridgeCommandRouter routes /sessions cwd to interactive handler", async () => {
+  const fixture = routerFixture();
+  await fixture.router.handle(message(), target(), "sessions", ["cwd"], "/sessions cwd");
+  assert.equal(fixture.calls.sessionsCwd, 1);
+  assert.equal(fixture.sent.length, 0);
+});
+
+test("BridgeCommandRouter routes /session id to detail handler but keeps numeric pages as list", async () => {
+  const fixture = routerFixture();
+  await fixture.router.handle(message(), target(), "session", ["thread-123"], "/session thread-123");
+  await fixture.router.handle(message(), target(), "session", ["2"], "/session 2");
+
+  assert.equal(fixture.sent.at(-2), "session detail thread-123");
+  assert.equal(fixture.sent.at(-1), "sessions");
+});
+
 test("BridgeCommandRouter routes group receive command without route busy guard", async () => {
   const fixture = routerFixture({ busy: true });
   await fixture.router.handle(message(), target(), "group", ["on"], "/group on");
@@ -116,6 +132,7 @@ function routerFixture(options: {
     model: 0,
     progressMode: 0,
     contextRefresh: 0,
+    sessionsCwd: 0,
     groupReceive: 0,
     compact: 0,
   };
@@ -140,6 +157,10 @@ function routerFixture(options: {
     },
     status: async () => "status",
     sessions: async () => "sessions",
+    sessionDetail: async (_message, sessionId) => `session detail ${sessionId}`,
+    sessionsCwd: async () => {
+      calls.sessionsCwd += 1;
+    },
     resumeOrUseSession: async () => undefined,
     cancel: async () => undefined,
     whoami: () => "whoami",

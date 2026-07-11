@@ -157,7 +157,8 @@ test("serve wizard formats mode pages with return actions", () => {
   assert.ok(settingsText.includes("当前位置：首页 > 权限设置"));
   assert.ok(settingsText.includes("当前: 审批模式"));
   assert.ok(settingsText.includes("1. 审批模式"));
-  assert.ok(settingsText.includes("2. 完全权限"));
+  assert.ok(settingsText.includes("2. Approve for me"));
+  assert.ok(settingsText.includes("3. 完全权限"));
   assert.ok(settingsText.includes("0. 返回"));
 
   const workdirText = formatWorkdirSettingsMenu("/repo");

@@ -6,6 +6,7 @@ import type { SessionContextSnapshotObservedBy } from "../state/persistent-state
 import type {
   BindSessionResult,
   InitialRouteBinding,
+  SessionCwdSelectionState,
   SessionListItem,
   SessionSelectionState,
   UnboundRoutePolicy,
@@ -19,6 +20,13 @@ import {
   ownerConflictText,
 } from "./formatters.js";
 import type { BridgeDelivery } from "./delivery.js";
+import {
+  buildSessionDirectories,
+  formatSessionDirectoryPage,
+  formatSessionDirectoryScope,
+  paginateSessionDirectories,
+  sessionDirectoryKey,
+} from "./session-directory.js";
 import {
   SESSION_LIST_PAGE_SIZE,
   buildSessionList,
@@ -81,6 +89,7 @@ export class BridgeSessionFlow {
   private readonly syncRouteCollaborationModeFromSession: BridgeSessionFlowOptions["syncRouteCollaborationModeFromSession"];
   private readonly recordSessionContextSnapshot?: BridgeSessionFlowOptions["recordSessionContextSnapshot"];
   private readonly selections = new Map<string, SessionSelectionState>();
+  private readonly cwdSelections = new Map<string, SessionCwdSelectionState>();
   private pendingInitialRouteBinding?: InitialRouteBinding;
   private pendingInitialRouteKey?: string;
 
@@ -104,12 +113,18 @@ export class BridgeSessionFlow {
     return this.selections.has(routeKey);
   }
 
+  hasSessionCwdSelection(routeKey: string): boolean {
+    return this.cwdSelections.has(routeKey);
+  }
+
   pendingInitialBindingForStatus(): InitialRouteBinding | undefined {
     return this.pendingInitialRouteBinding;
   }
 
   cancelSessionSelection(routeKey: string): boolean {
-    return this.selections.delete(routeKey);
+    const cancelledSelection = this.selections.delete(routeKey);
+    const cancelledCwdSelection = this.cwdSelections.delete(routeKey);
+    return cancelledSelection || cancelledCwdSelection;
   }
 
   async createNewSession(message: ChannelMessage, target: ChannelTarget): Promise<CodexSession> {
@@ -121,6 +136,7 @@ export class BridgeSessionFlow {
     this.state.bindSession(message.routeKey, session);
     this.applyStoredSessionRunPolicy(session.id);
     this.selections.delete(message.routeKey);
+    this.cwdSelections.delete(message.routeKey);
     this.clearPendingInitialRouteBindingIfApplies(message);
     this.applyRouteCollaborationModeToSession(message.routeKey, session.id);
     await this.recordSnapshot(session.id, "bind");
@@ -148,6 +164,7 @@ export class BridgeSessionFlow {
     this.state.bindSession(message.routeKey, session);
     this.applyStoredSessionRunPolicy(session.id);
     this.selections.delete(message.routeKey);
+    this.cwdSelections.delete(message.routeKey);
     this.clearPendingInitialRouteBindingIfApplies(message);
     this.applyRouteCollaborationModeToSession(message.routeKey, session.id);
     await this.recordSnapshot(session.id, "bind");
@@ -230,6 +247,38 @@ export class BridgeSessionFlow {
     await this.beginSessionSelection(message, target, `没有找到 session \`${sessionRef}\`，请从下面选择。`);
   }
 
+  async beginSessionCwdSelection(
+    message: ChannelMessage,
+    target: ChannelTarget,
+  ): Promise<void> {
+    let items: SessionListItem[];
+    try {
+      items = await buildSessionList({
+        state: this.state,
+        codex: this.codex,
+        routeKey: message.routeKey,
+        scope: "selectable",
+      });
+    } catch (error) {
+      await this.delivery.sendText(target, `读取 Codex 会话目录失败: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    const directories = buildSessionDirectories(items);
+    const selection: SessionCwdSelectionState = {
+      stage: "cwd",
+      items,
+      directories,
+      directoryPage: 1,
+      sessions: [],
+      sessionPage: 1,
+      pageSize: SESSION_LIST_PAGE_SIZE,
+      createdAt: Date.now(),
+    };
+    this.selections.delete(message.routeKey);
+    this.cwdSelections.set(message.routeKey, selection);
+    await this.delivery.sendText(target, this.sessionDirectoryText(selection));
+  }
+
   async handleSessionSelectionReply(
     message: ChannelMessage,
     target: ChannelTarget,
@@ -270,6 +319,78 @@ export class BridgeSessionFlow {
     const choice = page.items[choiceIndex - 1];
     if (!choice) {
       await this.delivery.sendText(target, this.sessionSelectionText(selection, `没有第 ${choiceIndex} 项，请重新选择。`));
+      return;
+    }
+    const result = await this.bindSessionById(message, target, choice.id);
+    if (!result.ok) await this.delivery.sendText(target, result.message);
+  }
+
+  async handleSessionCwdSelectionReply(
+    message: ChannelMessage,
+    target: ChannelTarget,
+    text: string,
+  ): Promise<void> {
+    const selection = this.cwdSelections.get(message.routeKey);
+    if (!selection) return;
+    if (isCancelSessionSelectionText(text)) {
+      this.cwdSelections.delete(message.routeKey);
+      await this.delivery.sendText(target, "已退出会话目录浏览。");
+      return;
+    }
+    if (sessionListStateExpired(selection.createdAt)) {
+      this.cwdSelections.delete(message.routeKey);
+      await this.delivery.sendText(target, "会话目录选择已过期，请重新发送 `/sessions cwd`。");
+      return;
+    }
+    const action = sessionPageAction(text);
+    if (action) {
+      if (selection.stage === "cwd") {
+        selection.directoryPage += action === "next" ? 1 : -1;
+        selection.createdAt = Date.now();
+        await this.delivery.sendText(target, this.sessionDirectoryText(selection));
+        return;
+      }
+      selection.sessionPage += action === "next" ? 1 : -1;
+      selection.createdAt = Date.now();
+      await this.delivery.sendText(target, this.cwdSessionSelectionText(selection));
+      return;
+    }
+    const choiceIndex = pageNumberFromText(text);
+    if (choiceIndex === undefined) {
+      await this.delivery.sendText(target, selection.stage === "cwd"
+        ? "正在按工作目录浏览 Codex 会话。请直接回复目录编号，例如 1；回复 `n` 下一页，`p` 上一页；回复“取消”退出。"
+        : "正在选择目录下的 Codex 会话。请直接回复当前页 session 编号，例如 1；回复 `n` 下一页，`p` 上一页；回复“取消”退出。");
+      return;
+    }
+    if (selection.stage === "cwd") {
+      const page = paginateSessionDirectories(selection.directories, selection.directoryPage, selection.pageSize);
+      selection.directoryPage = page.page;
+      const directory = page.items[choiceIndex - 1];
+      if (!directory) {
+        await this.delivery.sendText(target, this.sessionDirectoryText(selection, `没有第 ${choiceIndex} 个目录，请重新选择。`));
+        return;
+      }
+      selection.stage = "session";
+      selection.selectedCwd = directory.cwd;
+      selection.sessions = selection.items.filter((item) => sessionDirectoryKey(item.cwd) === directory.key);
+      selection.sessionPage = 1;
+      selection.createdAt = Date.now();
+      await this.delivery.sendText(target, this.cwdSessionSelectionText(selection));
+      return;
+    }
+    if (await this.isRouteExecutionBusy(message.routeKey)) {
+      await this.delivery.sendText(target, ROUTE_BUSY_MUTATION_REJECT_TEXT);
+      return;
+    }
+    const page = paginateSessionList(selection.sessions, "selectable", selection.sessionPage, selection.pageSize);
+    selection.sessionPage = page.page;
+    const choice = page.items[choiceIndex - 1];
+    if (!choice) {
+      await this.delivery.sendText(target, this.cwdSessionSelectionText(selection, `没有第 ${choiceIndex} 项，请重新选择。`));
+      return;
+    }
+    if (!choice.selectable) {
+      await this.delivery.sendText(target, this.cwdSessionSelectionText(selection, choice.unavailableReason ?? "该 session 当前不可切换。"));
       return;
     }
     const result = await this.bindSessionById(message, target, choice.id);
@@ -327,6 +448,7 @@ export class BridgeSessionFlow {
       this.applyStoredSessionRunPolicy(session.id);
       await this.recordSnapshot(session.id, "bind");
       this.selections.delete(message.routeKey);
+      this.cwdSelections.delete(message.routeKey);
       this.clearPendingInitialRouteBindingIfApplies(message);
       await this.delivery.sendText(target, [
         "已绑定 Codex 会话",
@@ -471,6 +593,8 @@ export class BridgeSessionFlow {
     });
     this.state.bindSession(message.routeKey, session);
     this.applyStoredSessionRunPolicy(session.id);
+    this.selections.delete(message.routeKey);
+    this.cwdSelections.delete(message.routeKey);
     this.applyRouteCollaborationModeToSession(message.routeKey, session.id);
     if (options.recordBindSnapshot ?? true) {
       await this.recordSnapshot(session.id, "bind");
@@ -521,6 +645,7 @@ export class BridgeSessionFlow {
       createdAt: Date.now(),
       hiddenUnavailableCount,
     };
+    this.cwdSelections.delete(message.routeKey);
     this.selections.set(message.routeKey, selection);
     await this.delivery.sendText(target, this.sessionSelectionText(selection, intro));
   }
@@ -544,6 +669,24 @@ export class BridgeSessionFlow {
       emptyText: "没有可切换的 Codex 会话。",
       selectionMode: true,
       hiddenUnavailableCount: selection.hiddenUnavailableCount,
+      intro,
+    });
+  }
+
+  private sessionDirectoryText(selection: SessionCwdSelectionState, intro?: string): string {
+    const page = paginateSessionDirectories(selection.directories, selection.directoryPage, selection.pageSize);
+    selection.directoryPage = page.page;
+    return formatSessionDirectoryPage(page, { intro });
+  }
+
+  private cwdSessionSelectionText(selection: SessionCwdSelectionState, intro?: string): string {
+    const page = paginateSessionList(selection.sessions, "selectable", selection.sessionPage, selection.pageSize);
+    selection.sessionPage = page.page;
+    return formatSessionListPage(page, {
+      title: "目录下 Codex 会话",
+      scopeLabel: formatSessionDirectoryScope(selection.selectedCwd),
+      emptyText: "该目录下没有 Codex 会话。",
+      selectionMode: true,
       intro,
     });
   }

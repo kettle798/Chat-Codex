@@ -123,6 +123,27 @@ export interface SessionSelectionState {
   hiddenUnavailableCount?: number;
 }
 
+export interface SessionDirectoryItem {
+  key: string;
+  cwd?: string;
+  totalSessions: number;
+  selectableSessions: number;
+  current: boolean;
+  latestUpdatedAt: string;
+}
+
+export interface SessionCwdSelectionState {
+  stage: "cwd" | "session";
+  items: SessionListItem[];
+  directories: SessionDirectoryItem[];
+  directoryPage: number;
+  selectedCwd?: string;
+  sessions: SessionListItem[];
+  sessionPage: number;
+  pageSize: number;
+  createdAt: number;
+}
+
 export type CompactState =
   | { type: "none" }
   | { type: "confirming"; sessionId: string; requestedAt: string }

@@ -30,7 +30,12 @@ export async function runCodexSettingsLoop(rl: Interface, startup: PreparedServe
     }));
     const answer = normalizeText(await rl.question("请选择 [0 返回]: "));
     if (!answer || answer === "0" || isBackText(answer)) return;
-    if (answer === "2" || answer === "full") {
+    if (answer === "2" || answer === "approve-for-me" || answer === "auto") {
+      startup.policy = { permissionMode: "approve-for-me", sandbox: "workspace-write" };
+      console.log("已设置新 session 默认权限: Approve for me");
+      continue;
+    }
+    if (answer === "3" || answer === "full") {
       try {
         await confirmFullPermission(rl, false);
       } catch (error) {
@@ -78,12 +83,18 @@ export async function configurePermissionMode(rl: Interface, startup: PreparedSe
     `当前: ${formatPolicyForCli(startup.policy)}`,
     "",
     "1. 审批模式（workspace-write 沙箱，推荐）",
-    "2. 完全权限（跳过审批和沙箱，高风险）",
+    "2. Approve for me（自动审阅，workspace-write 沙箱）",
+    "3. 完全权限（跳过审批和沙箱，高风险）",
     "0. 返回",
   ].join("\n"));
   const answer = normalizeText(await rl.question("请选择 [0 返回]: "));
   if (!answer || answer === "0" || isBackText(answer)) return;
-  if (answer === "2" || answer === "full") {
+  if (answer === "2" || answer === "approve-for-me" || answer === "auto") {
+    startup.policy = { permissionMode: "approve-for-me", sandbox: "workspace-write" };
+    console.log("已设置权限模式: Approve for me");
+    return;
+  }
+  if (answer === "3" || answer === "full") {
     try {
       await confirmFullPermission(rl, false);
     } catch (error) {

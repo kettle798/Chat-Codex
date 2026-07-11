@@ -1,8 +1,8 @@
 import type { CodexBackgroundEventHandler, CodexEvent, CodexProgressKind } from "../types.js";
 import {
   appServerErrorMessage,
-  isTransientAppServerError,
   messagePhaseValue,
+  parseAppServerReconnectNotice,
   progressFromThreadItem,
   shouldFlushProgressDraft,
   textFromPlan,
@@ -226,12 +226,16 @@ export class AppServerTurnController {
     }
     if (notification.method === "error") {
       const error = appServerErrorMessage(params);
-      if (isTransientAppServerError(error)) {
-        const text = `Codex 连接恢复中: ${error}`;
+      const reconnect = parseAppServerReconnectNotice(error);
+      if (reconnect) {
+        const text = `Codex 连接恢复中: ${reconnect.message}`;
         if (turn) {
           this.pushProgressEvent(turn, sessionId, turnId, text, "other");
         } else {
           this.pushTurnEvent(turnId, { type: "assistant.progress", sessionId, turnId, text, kind: "other" });
+        }
+        if (reconnect.attempt === reconnect.total) {
+          this.pushReconnectNotification(sessionId, turnId, reconnect);
         }
         return;
       }
@@ -460,6 +464,29 @@ export class AppServerTurnController {
       turnId,
       text: normalized,
       ...(itemId ? { itemId } : {}),
+    });
+  }
+
+  private pushReconnectNotification(
+    sessionId: string,
+    turnId: string,
+    reconnect: { attempt: number; total: number },
+  ): void {
+    this.pushTurnEvent(turnId, {
+      type: "codex.notification",
+      sessionId,
+      turnId,
+      notification: {
+        method: "appServer/reconnecting",
+        kind: "connection",
+        text: [
+          "Codex 连接恢复告警：",
+          `app-server 已重连到最后一次尝试：${reconnect.attempt}/${reconnect.total}。`,
+          "当前任务仍在运行；如果连接无法恢复，后续会收到失败消息。",
+        ].join("\n"),
+        dedupeKey: `appServer/reconnecting:${sessionId}:${turnId}:${reconnect.total}`,
+        dedupeWindowMs: 5 * 60_000,
+      },
     });
   }
 }

@@ -28,6 +28,12 @@ export class BridgeNotificationDelivery {
     const { routeKey, target, event } = input;
     const text = this.applyLifecycleState(routeKey, event) ?? event.notification.text;
     if (this.isDuplicate(routeKey, event)) return;
+    this.state.recordCodexNotification({
+      sessionId: event.sessionId,
+      method: event.notification.method,
+      kind: event.notification.kind,
+      text,
+    });
     await this.delivery.sendText(target, text);
   }
 
@@ -78,6 +84,7 @@ function lifecycleStatusDetail(lifecycle: CodexThreadLifecycleNotification): str
   switch (lifecycle) {
     case "archived": return "thread archived";
     case "closed": return "thread closed";
+    case "deleted": return "thread deleted";
     case "unarchived": return "thread unarchived";
   }
 }
@@ -93,6 +100,13 @@ function lifecycleNoticeText(lifecycle: CodexThreadLifecycleNotification, sessio
   if (lifecycle === "closed") {
     return [
       "当前 Codex 会话已在 Codex 侧关闭，Chat-Codex 已解除绑定。",
+      `原 Session: ${sessionId}`,
+      "请发送 /new 创建新会话，或发送 /resume 切换到其他会话。",
+    ].join("\n");
+  }
+  if (lifecycle === "deleted") {
+    return [
+      "当前 Codex 会话已在 Codex 侧删除，Chat-Codex 已解除绑定。",
       `原 Session: ${sessionId}`,
       "请发送 /new 创建新会话，或发送 /resume 切换到其他会话。",
     ].join("\n");

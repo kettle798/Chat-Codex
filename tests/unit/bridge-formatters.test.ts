@@ -6,6 +6,8 @@ import {
   composeFinalAnswer,
   composeSteerBatchInput,
   formatApprovalKindForUser,
+  formatGoalStatus,
+  formatGoalStatusLines,
   formatGoalTimestamp,
   formatModelPolicy,
   formatRunPolicy,
@@ -34,7 +36,9 @@ test("bridge formatters parse progress and model command values", () => {
   assert.deepEqual(parseModelCommandArgs(["effort", "high"]), { type: "effort", effort: "high" });
   assert.deepEqual(parseModelCommandArgs(["gpt-5.5", "effort", "xhigh"]), { type: "set", modelRef: "gpt-5.5", effort: "xhigh" });
   assert.equal(parseReasoningEffort("xhigh"), "xhigh");
-  assert.equal(parseReasoningEffort("impossible"), undefined);
+  assert.equal(parseReasoningEffort("MAX"), "max");
+  assert.equal(parseReasoningEffort("future_effort"), "future_effort");
+  assert.equal(parseReasoningEffort("bad value!"), undefined);
 });
 
 test("bridge formatters keep route mutation guard semantics", () => {
@@ -50,9 +54,22 @@ test("bridge formatters keep route mutation guard semantics", () => {
 
 test("bridge formatters preserve status labels and local goal time", () => {
   assert.equal(formatRunPolicy({ permissionMode: "approval", sandbox: "workspace-write" }), "approval sandbox=workspace-write");
+  assert.equal(formatRunPolicy({ permissionMode: "approve-for-me", sandbox: "workspace-write" }), "approve-for-me sandbox=workspace-write");
   assert.equal(formatRunPolicy({ permissionMode: "full" }), "full");
   assert.equal(formatModelPolicy({ model: "gpt-5.5", reasoningEffort: "high" }), "model=`gpt-5.5` effort=`high`");
   assert.equal(formatApprovalKindForUser("command"), "命令执行");
+  assert.equal(formatGoalStatus("blocked"), "blocked");
+  assert.equal(formatGoalStatus("usageLimited"), "usage-limited");
+  assert.deepEqual(formatGoalStatusLines({
+    threadId: "thread-1",
+    objective: "等待配额恢复",
+    status: "usageLimited",
+    tokenBudget: null,
+    tokensUsed: 10,
+    timeUsedSeconds: 20,
+    createdAt: 1700000000,
+    updatedAt: 1700000000,
+  }).slice(0, 1), ["- 长期目标 (/goal): 已达用量限制 - 等待配额恢复"]);
   assert.equal(formatGoalTimestamp(1700000000, { timeZone: "Asia/Shanghai" }), "2023-11-15 06:13:20（Asia/Shanghai）");
   assert.equal(formatGoalTimestamp(1700000000, { timeZone: "UTC" }), "2023-11-14 22:13:20（UTC）");
   assert.equal(formatGoalTimestamp(0, { timeZone: "UTC" }), "未知");
@@ -157,8 +174,8 @@ test("bridge formatters resolve model references and unsupported efforts", () =>
 function model(
   id: string,
   displayName: string,
-  efforts: Array<"low" | "medium" | "high" | "xhigh">,
-  defaultReasoningEffort: "low" | "medium" | "high" | "xhigh",
+  efforts: string[],
+  defaultReasoningEffort: string,
 ): CodexModelOption {
   return {
     id,

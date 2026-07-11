@@ -10,7 +10,7 @@ import {
   type CodexCommandResolution,
 } from "./codex-process.js";
 
-export type CodexPermissionMode = "approval" | "full";
+export type CodexPermissionMode = "approval" | "approve-for-me" | "full";
 export type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 
 export interface CodexRunPolicy {
@@ -21,7 +21,11 @@ export interface CodexRunPolicy {
 export interface CodexRunPolicyStatus {
   policy: CodexRunPolicy;
   interactiveApprovals: boolean;
-  effectiveApprovalPolicy?: "never" | "on-request";
+  effectiveApprovalPolicy?: "never" | "on-request" | string;
+  effectiveApprovalsReviewer?: "user" | "auto_review" | string | null;
+  effectiveSandbox?: string;
+  activePermissionProfile?: string | null;
+  supportedPermissionModes?: CodexPermissionMode[];
   note?: string;
 }
 

@@ -13,6 +13,8 @@ export interface BridgeCommandHandlers {
   createNewSession(message: ChannelMessage, target: ChannelTarget, args: string[], rawText: string): Promise<unknown>;
   status(message: ChannelMessage): Promise<string>;
   sessions(message: ChannelMessage, args: string[], commandName: string): Promise<string>;
+  sessionDetail(message: ChannelMessage, sessionId: string): Promise<string>;
+  sessionsCwd(message: ChannelMessage, target: ChannelTarget): Promise<void>;
   resumeOrUseSession(message: ChannelMessage, target: ChannelTarget, sessionRef: string | undefined): Promise<void>;
   cancel(message: ChannelMessage, target: ChannelTarget): Promise<void>;
   whoami(message: ChannelMessage): string;
@@ -96,6 +98,17 @@ export class BridgeCommandRouter {
         return;
       case "session":
       case "sessions":
+        if (args[0]?.toLowerCase() === "cwd") {
+          await this.handlers.sessionsCwd(message, target);
+          return;
+        }
+        if (name === "session") {
+          const detailSessionId = sessionDetailIdFromArgs(args);
+          if (detailSessionId) {
+            await this.delivery.sendText(target, await this.handlers.sessionDetail(message, detailSessionId));
+            return;
+          }
+        }
         await this.delivery.sendText(target, await this.handlers.sessions(message, args, name));
         return;
       case "all-sessions":
@@ -195,4 +208,25 @@ function refreshCommandFor(
 ): ChannelRefreshCommandPolicy | undefined {
   const normalized = normalizeDeliveryCommandName(commandName);
   return policy.refreshCommands.find((command) => normalizeDeliveryCommandName(command.command) === normalized);
+}
+
+function sessionDetailIdFromArgs(args: string[]): string | undefined {
+  const [first, second, ...rest] = args;
+  if (!first || rest.length > 0) return undefined;
+  const normalized = first.toLowerCase();
+  if (normalized === "detail") return second && !isSessionListControlArg(second) ? second : undefined;
+  if (second) return undefined;
+  return isSessionListControlArg(first) ? undefined : first;
+}
+
+function isSessionListControlArg(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return true;
+  return normalized === "all"
+    || normalized === "next"
+    || normalized === "prev"
+    || normalized === "previous"
+    || normalized === "n"
+    || normalized === "p"
+    || /^\d+$/.test(normalized);
 }

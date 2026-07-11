@@ -32,5 +32,6 @@ export function formatSessionChoice(index: number, session: DiscoveredCodexSessi
 
 export function formatPolicyForCli(policy: CodexRunPolicy): string {
   if (policy.permissionMode === "full") return formatPermissionModeForUser(policy.permissionMode);
+  if (policy.permissionMode === "approve-for-me") return formatPermissionModeForUser(policy.permissionMode);
   return `审批模式（${policy.sandbox ?? "workspace-write"} 沙箱，推荐）`;
 }

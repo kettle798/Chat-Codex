@@ -21,7 +21,14 @@ export function goalFromResponse(value: Record<string, unknown>): CodexGoal {
 }
 
 export function goalStatusValue(value: unknown): CodexGoalStatus {
-  if (value === "active" || value === "paused" || value === "budgetLimited" || value === "complete") {
+  if (
+    value === "active"
+    || value === "paused"
+    || value === "blocked"
+    || value === "usageLimited"
+    || value === "budgetLimited"
+    || value === "complete"
+  ) {
     return value;
   }
   return "active";

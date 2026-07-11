@@ -8,7 +8,6 @@ import type {
   CodexSessionModelInfo,
   CodexSessionStatus,
 } from "../types.js";
-import { CODEX_REASONING_EFFORTS } from "../types.js";
 import { arrayValue, numberValue, objectValue, stringValue } from "./value-parsers.js";
 
 export function cloneModelPolicy(policy: CodexModelPolicy): CodexModelPolicy {
@@ -73,15 +72,45 @@ function modelOptionFromValue(value: unknown): CodexModelOption | undefined {
   const serviceTiers = arrayValue(object.serviceTiers ?? object.service_tiers)
     .map(modelServiceTierFromValue)
     .filter((tier): tier is CodexModelServiceTier => Boolean(tier));
+  const defaultServiceTier = hasValue(object, "defaultServiceTier") || hasValue(object, "default_service_tier")
+    ? stringValue(object.defaultServiceTier ?? object.default_service_tier) ?? null
+    : undefined;
+  const inputModalities = arrayValue(object.inputModalities ?? object.input_modalities)
+    .map((item) => stringValue(item))
+    .filter((item): item is string => Boolean(item));
+  const supportsPersonality = typeof object.supportsPersonality === "boolean"
+    ? object.supportsPersonality
+    : typeof object.supports_personality === "boolean"
+      ? object.supports_personality
+      : undefined;
+  const upgrade = hasValue(object, "upgrade")
+    ? stringValue(object.upgrade) ?? null
+    : undefined;
+  const upgradeInfo = hasValue(object, "upgradeInfo")
+    ? object.upgradeInfo
+    : hasValue(object, "upgrade_info")
+      ? object.upgrade_info
+      : undefined;
+  const availabilityNux = hasValue(object, "availabilityNux")
+    ? object.availabilityNux
+    : hasValue(object, "availability_nux")
+      ? object.availability_nux
+      : undefined;
   return {
     id,
     model,
     displayName: stringValue(object.displayName ?? object.display_name) ?? model,
     ...(stringValue(object.description) ? { description: stringValue(object.description) } : {}),
+    ...(upgrade !== undefined ? { upgrade } : {}),
+    ...(upgradeInfo !== undefined ? { upgradeInfo } : {}),
+    ...(availabilityNux !== undefined ? { availabilityNux } : {}),
     hidden: object.hidden === true,
     supportedReasoningEfforts,
     ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+    ...(inputModalities.length > 0 ? { inputModalities } : {}),
+    ...(supportsPersonality !== undefined ? { supportsPersonality } : {}),
     ...(serviceTiers.length > 0 ? { serviceTiers } : {}),
+    ...(defaultServiceTier !== undefined ? { defaultServiceTier } : {}),
     ...(typeof object.isDefault === "boolean" ? { isDefault: object.isDefault } : {}),
   };
 }
@@ -112,9 +141,16 @@ function modelServiceTierFromValue(value: unknown): CodexModelServiceTier | unde
 }
 
 function reasoningEffortValue(value: unknown): CodexReasoningEffort | undefined {
-  return typeof value === "string" && (CODEX_REASONING_EFFORTS as readonly string[]).includes(value)
-    ? value as CodexReasoningEffort
-    : undefined;
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return isReasoningEffortValue(normalized) ? normalized : undefined;
+}
+
+function isReasoningEffortValue(value: string): boolean {
+  return /^[a-z][a-z0-9_-]{0,63}$/.test(value);
+}
+
+function hasValue(object: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(object, key);
 }
 
 export function parseTokenUsage(value: Record<string, unknown>): CodexSessionContextUsage | undefined {

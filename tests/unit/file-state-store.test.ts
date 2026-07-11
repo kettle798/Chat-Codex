@@ -84,12 +84,12 @@ test("FileStateStore persists session run policy", () => {
   const rootDir = tempStateDir();
   const store = new FileStateStore({ rootDir });
 
-  store.setSessionRunPolicy("session_policy", { permissionMode: "full" });
+  store.setSessionRunPolicy("session_policy", { permissionMode: "approve-for-me", sandbox: "workspace-write" });
 
   const reloaded = new FileStateStore({ rootDir });
-  assert.equal(reloaded.getSessionRunPolicy("session_policy")?.permissionMode, "full");
+  assert.equal(reloaded.getSessionRunPolicy("session_policy")?.permissionMode, "approve-for-me");
   const policies = readJson<SessionPoliciesDocument>(path.join(rootDir, "session-policies.json"));
-  assert.deepEqual(policies.policies.map((policy) => [policy.sessionId, policy.runPolicy.permissionMode]), [["session_policy", "full"]]);
+  assert.deepEqual(policies.policies.map((policy) => [policy.sessionId, policy.runPolicy.permissionMode]), [["session_policy", "approve-for-me"]]);
 });
 
 test("FileStateStore persists route unbind and releases owner", () => {

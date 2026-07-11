@@ -31,7 +31,7 @@ export async function prepareCodexServeStartup(
   }
   const policy: CodexRunPolicy = {
     permissionMode,
-    sandbox: permissionMode === "approval" ? "workspace-write" : undefined,
+    sandbox: permissionMode === "full" ? undefined : "workspace-write",
   };
   return {
     policy,

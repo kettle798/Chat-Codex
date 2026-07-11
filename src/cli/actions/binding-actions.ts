@@ -338,6 +338,7 @@ export function formatRouteLabel(route: RouteRecord): string {
 export function formatRunPolicyForUser(policy: CodexRunPolicy | undefined): string {
   if (!policy) return "未单独设置（使用默认权限）";
   if (policy.permissionMode === "full") return "完全权限（跳过审批和沙箱，高风险）";
+  if (policy.permissionMode === "approve-for-me") return "Approve for me（自动审阅，workspace-write 沙箱）";
   return `审批模式（${policy.sandbox ?? "workspace-write"} 沙箱）`;
 }
 

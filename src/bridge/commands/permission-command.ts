@@ -50,6 +50,33 @@ export async function handlePermissionCommand(
     ].filter(Boolean).join("\n"));
     return;
   }
+  if (rawMode === "approve-for-me" || rawMode === "auto" || rawMode === "自动审批") {
+    const policyStatus = options.runPolicyStatus(sessionId);
+    if (policyStatus?.supportedPermissionModes && !policyStatus.supportedPermissionModes.includes("approve-for-me")) {
+      await options.delivery.sendText(target, "当前 Codex Adapter 不支持 Approve for me。请继续使用 /permission approval 或 /permission full confirm。");
+      return;
+    }
+    if (!isConfirmed(args.slice(1))) {
+      await options.delivery.sendText(target, [
+        "Approve for me 会让 Codex 自动审阅审批请求，只在自动审阅认为需要时再阻断。",
+        "它不是完全权限，但会减少你手动确认的机会。",
+        "",
+        "确认切换请发送:",
+        "/permission approve-for-me confirm",
+      ].join("\n"));
+      return;
+    }
+    const policy: CodexRunPolicy = { permissionMode: "approve-for-me", sandbox: "workspace-write" };
+    options.codex.setRunPolicy(policy, sessionId);
+    if (sessionId) options.state.setSessionRunPolicy(sessionId, policy);
+    await options.delivery.sendText(target, [
+      "已切换 Codex 权限模式: approve-for-me",
+      sessionId ? `作用范围: 当前会话 \`${sessionId}\`` : "作用范围: 默认策略（后续新会话）",
+      "后续审批请求将交给 Codex 自动审阅；这不是完全权限，仍使用 workspace-write sandbox。",
+      options.routeQueue.hasWorker(message.routeKey) ? "当前正在运行的任务不会被改写；需要立即生效请先 /stop。" : undefined,
+    ].filter(Boolean).join("\n"));
+    return;
+  }
   if (rawMode === "full" || rawMode === "danger" || rawMode === "完全权限") {
     if (!isConfirmed(args.slice(1))) {
       await options.delivery.sendText(target, [
@@ -70,5 +97,5 @@ export async function handlePermissionCommand(
     ].filter(Boolean).join("\n"));
     return;
   }
-  await options.delivery.sendText(target, "未知权限模式。可用命令: /permission、/permission approval、/permission full confirm。");
+  await options.delivery.sendText(target, "未知权限模式。可用命令: /permission、/permission approval、/permission approve-for-me confirm、/permission full confirm。");
 }

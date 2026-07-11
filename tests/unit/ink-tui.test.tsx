@@ -70,6 +70,7 @@ test("Ink TUI renders dashboard and navigates to core pages", async () => {
   await waitForInk();
   assert.match(cleanFrame(view), /默认权限设置/);
   assert.match(cleanFrame(view), /审批模式/);
+  assert.match(cleanFrame(view), /Approve for me/);
 
   view.stdin.write("\u001B");
   await waitForInk();
@@ -678,6 +679,41 @@ test("Ink TUI shows session last active time in binding views", async () => {
   await waitForInk();
   assert.match(cleanFrame(view), /最近活跃/);
   assert.match(cleanFrame(view), /活跃会话/);
+
+  view.unmount();
+});
+
+test("Ink TUI shows bound session details in pairing detail", async () => {
+  const dashboard = dashboardFixture();
+  const activeSession = {
+    id: "session-pairing-full-id",
+    shortId: "session-",
+    title: "配对绑定会话",
+    cwd: "/repo/pairing",
+    updatedAt: "2026-05-18T00:00:00.000Z",
+  };
+  dashboard.routes.bound = 1;
+  dashboard.bindings[0].activeSession = activeSession;
+  const trustedPairing = dashboard.pairing.routes.find((route) => route.route.routeKey === dashboard.bindings[0].route.routeKey);
+  assert.ok(trustedPairing);
+  trustedPairing.activeSession = activeSession;
+
+  const view = render(<ChatCodexTui actions={mockActions(dashboard)} onDone={() => undefined} />);
+  await waitForInk();
+
+  view.stdin.write("t");
+  await waitForInk();
+  view.stdin.write("\u001B[B");
+  await waitForInk();
+  view.stdin.write("\r");
+  await waitForInk();
+
+  assert.match(cleanFrame(view), /配对详情/);
+  assert.match(cleanFrame(view), /当前绑定\s+已绑定 Codex session/);
+  assert.match(cleanFrame(view), /当前 session\s+配对绑定会话 \/ session-/);
+  assert.match(cleanFrame(view), /Session ID\s+session-pairing-full-id/);
+  assert.match(cleanFrame(view), /Session 活跃\s+2026-05-18/);
+  assert.match(cleanFrame(view), /Session 目录\s+\/repo\/pairing/);
 
   view.unmount();
 });

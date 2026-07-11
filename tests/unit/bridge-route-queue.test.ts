@@ -57,6 +57,28 @@ test("BridgeRouteQueue delivers Codex notifications even when progress is suppre
   assert.equal(fixture.sentTexts.some((text) => text.includes("普通进度不应发送")), false);
 });
 
+test("BridgeRouteQueue delivers connection notifications even when normal progress is silent", async () => {
+  const fixture = routeQueueFixture({
+    codex: new NotificationCodexAdapter({
+      text: "Codex 连接恢复告警：\napp-server 已重连到最后一次尝试：5/5。",
+      kind: "connection",
+      method: "appServer/reconnecting",
+    }),
+    deliveryPolicy: {
+      ...DEFAULT_CHANNEL_DELIVERY_POLICY,
+      defaultProgressMode: "silent",
+      allowedProgressModes: ["silent", "brief"],
+    },
+    shouldDeliverProgress: false,
+  });
+
+  await fixture.queue.enqueuePrompt(message("route-a", "连接通知"), target("route-a"), "连接通知");
+  await fixture.queue.waitForWorkers();
+
+  assert.ok(fixture.sentTexts.some((text) => text.includes("Codex 连接恢复告警") && text.includes("5/5")));
+  assert.equal(fixture.sentTexts.some((text) => text.includes("普通进度不应发送")), false);
+});
+
 test("BridgeRouteQueue unbinds current route when Codex archives the thread", async () => {
   const codex = new LifecycleNotificationCodexAdapter("archived");
   const session = await codex.startSession({ routeKey: "route-a", cwd: "/repo" });

@@ -757,7 +757,7 @@ function stringOrUndefined(value: unknown): string | undefined {
 function isRunPolicy(value: unknown): value is CodexRunPolicy {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const policy = value as { permissionMode?: unknown; sandbox?: unknown };
-  if (policy.permissionMode !== "approval" && policy.permissionMode !== "full") return false;
+  if (policy.permissionMode !== "approval" && policy.permissionMode !== "approve-for-me" && policy.permissionMode !== "full") return false;
   return policy.sandbox === undefined
     || policy.sandbox === "read-only"
     || policy.sandbox === "workspace-write"

@@ -35,8 +35,8 @@ export class AppServerSessionStore {
     return this.records.get(sessionId)?.status ?? { type: "unknown", detail: "session not found" };
   }
 
-  listSessions(routeKey: string | undefined, codexHome: string | undefined): CodexSessionSummary[] {
-    const localSessions = [...this.records.values()].filter((record) => (routeKey ? record.routeKey === routeKey : true)).map((record) => ({
+  listRuntimeSessions(routeKey?: string): CodexSessionSummary[] {
+    return [...this.records.values()].filter((record) => (routeKey ? record.routeKey === routeKey : true)).map((record) => ({
       id: record.session.id,
       routeKey: record.routeKey,
       title: record.session.title,
@@ -44,6 +44,10 @@ export class AppServerSessionStore {
       status: record.status,
       updatedAt: record.updatedAt,
     }));
+  }
+
+  listSessions(routeKey: string | undefined, codexHome: string | undefined): CodexSessionSummary[] {
+    const localSessions = this.listRuntimeSessions(routeKey);
     if (routeKey) return localSessions;
 
     const seen = new Set(localSessions.map((session) => session.id));

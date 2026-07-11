@@ -405,7 +405,11 @@ export class BridgeRouteQueue {
 }
 
 function isTerminalLifecycleStatus(status: CodexSessionStatus | undefined): boolean {
-  return status?.type === "unknown" && (status.detail === "thread archived" || status.detail === "thread closed");
+  return status?.type === "unknown" && (
+    status.detail === "thread archived"
+    || status.detail === "thread closed"
+    || status.detail === "thread deleted"
+  );
 }
 
 function attachTurnRunId(target: ChannelTarget, turnId: string): void {

@@ -92,12 +92,14 @@ rl.on("line", (line) => {
           { reasoningEffort: "medium", description: "Medium" },
           { reasoningEffort: "high", description: "High" },
           { reasoningEffort: "xhigh", description: "Extra high" },
+          { reasoningEffort: "max", description: "Max" },
         ],
         defaultReasoningEffort: "high",
-        inputModalities: ["text"],
-        supportsPersonality: false,
+        inputModalities: ["text", "image"],
+        supportsPersonality: true,
         additionalSpeedTiers: [],
         serviceTiers: [{ id: "default", name: "Default", description: "Default tier" }],
+        defaultServiceTier: "default",
         isDefault: false,
       },
       {
@@ -142,6 +144,54 @@ rl.on("line", (line) => {
       return;
     }
     send({ id: message.id, result: {} });
+    return;
+  }
+  if (message.method === "thread/list") {
+    send({
+      id: message.id,
+      result: {
+        data: [
+          {
+            ...thread("/repo/from-thread-list"),
+            id: "thread-from-list-1",
+            sessionId: "thread-from-list-1",
+            name: "Thread List Session",
+            preview: "thread list preview",
+            recencyAt: 1778803200,
+            updatedAt: 1778716800,
+            status: { type: "idle" },
+          },
+        ],
+        nextCursor: null,
+        backwardsCursor: null,
+      },
+    });
+    return;
+  }
+  if (message.method === "thread/read") {
+    if (message.params.includeTurns !== false) {
+      send({ id: message.id, error: { code: -32602, message: "includeTurns must be false" } });
+      return;
+    }
+    const detail = {
+      ...thread("/repo/read-detail"),
+      id: message.params.threadId,
+      sessionId: message.params.threadId,
+      name: "Thread Read Detail",
+      preview: "thread read preview",
+      recencyAt: 1778803200,
+      updatedAt: 1778716800,
+      modelProvider: "proxy",
+      cliVersion: "fake-cli-1",
+      source: "appServer",
+      threadSource: "chatCodex",
+      path: "/tmp/thread-read.jsonl",
+      gitInfo: { sha: "abcdef1234567890", branch: "main", originUrl: "https://example.invalid/repo.git" },
+      forkedFromId: "fork-source-1",
+      parentThreadId: null,
+      ephemeral: false,
+    };
+    send({ id: message.id, result: { thread: detail } });
     return;
   }
   if (message.method === "thread/goal/get") {
@@ -195,6 +245,12 @@ rl.on("line", (line) => {
     turnId = "turn-app-server-" + Date.now();
     send({ id: message.id, result: { turn: { id: turnId, items: [], itemsView: "complete", status: "inProgress", error: null, startedAt: 1778716800, completedAt: null, durationMs: null } } });
     const prompt = message.params.input?.[0]?.text || "";
+    if (prompt.includes("transient reconnect final")) {
+      send({ method: "error", params: { threadId, turnId, error: { message: "Reconnecting... 5/5" } } });
+      send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg-1", text: "reconnect final done", phase: null, memoryCitation: null } } });
+      send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
+      return;
+    }
     if (prompt.includes("transient reconnect")) {
       send({ method: "error", params: { threadId, turnId, error: { message: "Reconnecting... 1/5" } } });
       send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg-1", text: "reconnected done", phase: null, memoryCitation: null } } });
@@ -321,6 +377,7 @@ rl.on("line", (line) => {
       send({ method: "warning", params: { threadId, message: "配置即将变化" } });
       send({ method: "model/rerouted", params: { threadId, turnId, fromModel: "fake", toModel: "fake-next", reason: "highRiskCyberActivity" } });
       send({ method: "model/verification", params: { threadId, turnId, verifications: ["trustedAccessForCyber"] } });
+      send({ method: "model/safetyBuffering/updated", params: { threadId, turnId, model: "fake-next", useCases: ["security"], reasons: ["classifier"], showBufferingUi: true, fasterModel: "fake" } });
       send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg-1", text: "status notifications done", phase: null, memoryCitation: null } } });
       send({ method: "turn/completed", params: { threadId, turn: { id: turnId, items: [], itemsView: "complete", status: "completed", error: null, startedAt: 1778716800, completedAt: 1778716801, durationMs: 1000 } } });
       return;
@@ -521,6 +578,7 @@ test("AppServerCodexAdapter maps status notifications into session state and not
   assert.ok(events.some((event) => event.type === "codex.notification" && event.notification.text.includes("Codex 警告")));
   assert.ok(events.some((event) => event.type === "codex.notification" && event.notification.text.includes("From: fake") && event.notification.text.includes("To: fake-next")));
   assert.ok(events.some((event) => event.type === "codex.notification" && event.notification.text.includes("trustedAccessForCyber")));
+  assert.ok(events.some((event) => event.type === "codex.notification" && event.notification.text.includes("模型安全缓冲") && event.notification.text.includes("fake-next")));
 });
 
 test("AppServerCodexAdapter sets thread names through app-server", async () => {
@@ -537,6 +595,47 @@ test("AppServerCodexAdapter sets thread names through app-server", async () => {
   await adapter.stop();
 
   assert.equal(sessions[0]?.title, "微信 / wx-main / 小黄");
+});
+
+test("AppServerCodexAdapter lists sessions from app-server thread list for unscoped discovery", async () => {
+  const root = tempDir();
+  const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
+  const session = await adapter.startSession({
+    routeKey: "route-1",
+    cwd: root,
+    title: "route session",
+  });
+
+  const allSessions = await adapter.listSessions();
+  const routeSessions = await adapter.listSessions("route-1");
+  await adapter.stop();
+
+  assert.ok(allSessions.some((item) => item.id === "thread-from-list-1" && item.title === "Thread List Session"));
+  assert.ok(allSessions.some((item) => item.id === session.id && item.title === "route session"));
+  assert.deepEqual(routeSessions.map((item) => item.id), [session.id]);
+});
+
+test("AppServerCodexAdapter reads session detail without loading turns", async () => {
+  const root = tempDir();
+  const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
+  const detail = await adapter.getSessionDetail("thread-detail-1");
+  await adapter.stop();
+
+  assert.equal(detail?.id, "thread-detail-1");
+  assert.equal(detail?.sessionId, "thread-detail-1");
+  assert.equal(detail?.threadId, "thread-detail-1");
+  assert.equal(detail?.title, "Thread Read Detail");
+  assert.equal(detail?.preview, "thread read preview");
+  assert.equal(detail?.cwd, "/repo/read-detail");
+  assert.equal(detail?.source, "appServer");
+  assert.equal(detail?.threadSource, "chatCodex");
+  assert.equal(detail?.modelProvider, "proxy");
+  assert.equal(detail?.cliVersion, "fake-cli-1");
+  assert.equal(detail?.path, "/tmp/thread-read.jsonl");
+  assert.equal(detail?.gitInfo?.branch, "main");
+  assert.equal(detail?.gitInfo?.sha, "abcdef1234567890");
+  assert.equal(detail?.forkedFromId, "fork-source-1");
+  assert.equal(detail?.ephemeral, false);
 });
 
 test("AppServerCodexAdapter restarts app-server when reloading a session", async () => {
@@ -769,6 +868,33 @@ test("AppServerCodexAdapter keeps running across transient reconnect notificatio
   assert.equal(events.some((event) => event.type === "turn.failed"), false);
 });
 
+test("AppServerCodexAdapter emits connection notification on final reconnect attempt", async () => {
+  const root = tempDir();
+  const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
+  const session = await adapter.startSession({
+    routeKey: "route-1",
+    cwd: root,
+    title: "test",
+  });
+  const events: CodexEvent[] = [];
+
+  for await (const event of adapter.run(session.id, "transient reconnect final please")) {
+    events.push(event);
+  }
+  await adapter.stop();
+
+  assert.ok(events.some((event) => event.type === "assistant.progress" && event.kind === "other" && event.text.includes("Reconnecting... 5/5")));
+  const notification = events.find((event) => event.type === "codex.notification" && event.notification.kind === "connection");
+  assert.equal(notification?.type, "codex.notification");
+  if (notification?.type === "codex.notification") {
+    assert.equal(notification.notification.method, "appServer/reconnecting");
+    assert.match(notification.notification.text, /最后一次尝试：5\/5/);
+    assert.match(notification.notification.dedupeKey, /appServer\/reconnecting:/);
+  }
+  assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "reconnect final done"));
+  assert.equal(events.some((event) => event.type === "turn.failed"), false);
+});
+
 test("AppServerCodexAdapter flushes reasoning summary sections", async () => {
   const root = tempDir();
   const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
@@ -974,6 +1100,8 @@ test("AppServerCodexAdapter reports interactive approval support", () => {
 
   assert.equal(status.interactiveApprovals, true);
   assert.equal(status.effectiveApprovalPolicy, "on-request");
+  assert.equal(status.effectiveApprovalsReviewer, "user");
+  assert.deepEqual(status.supportedPermissionModes, ["approval", "approve-for-me", "full"]);
   assert.match(status.note ?? "", /微信/);
 });
 
@@ -987,11 +1115,12 @@ test("AppServerCodexAdapter scopes run policy per session", async () => {
   });
   const second = await adapter.resumeSession("thread-app-server-2");
 
-  adapter.setRunPolicy({ permissionMode: "full" }, first.id);
+  adapter.setRunPolicy({ permissionMode: "approve-for-me", sandbox: "workspace-write" }, first.id);
   await adapter.stop();
 
-  assert.equal(adapter.getRunPolicy(first.id).permissionMode, "full");
-  assert.equal(adapter.getRunPolicyStatus(first.id).effectiveApprovalPolicy, "never");
+  assert.equal(adapter.getRunPolicy(first.id).permissionMode, "approve-for-me");
+  assert.equal(adapter.getRunPolicyStatus(first.id).effectiveApprovalPolicy, "on-request");
+  assert.equal(adapter.getRunPolicyStatus(first.id).effectiveApprovalsReviewer, "auto_review");
   assert.equal(adapter.getRunPolicy(second.id).permissionMode, "approval");
   assert.equal(adapter.getRunPolicyStatus(second.id).effectiveApprovalPolicy, "on-request");
   assert.equal(adapter.getRunPolicy().permissionMode, "approval");
@@ -1007,7 +1136,10 @@ test("AppServerCodexAdapter lists models from app-server", async () => {
 
   assert.deepEqual(visible.map((model) => model.model), ["fake", "fake-next"]);
   assert.equal(visible[0].defaultReasoningEffort, "medium");
-  assert.deepEqual(visible[1].supportedReasoningEfforts.map((option) => option.reasoningEffort), ["medium", "high", "xhigh"]);
+  assert.deepEqual(visible[1].supportedReasoningEfforts.map((option) => option.reasoningEffort), ["medium", "high", "xhigh", "max"]);
+  assert.deepEqual(visible[1].inputModalities, ["text", "image"]);
+  assert.equal(visible[1].supportsPersonality, true);
+  assert.equal(visible[1].defaultServiceTier, "default");
   assert.ok(all.some((model) => model.model === "fake-hidden"));
 });
 

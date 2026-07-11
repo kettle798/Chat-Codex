@@ -6,7 +6,7 @@ import { MockChannelAdapter } from "../../src/channels/mock/mock-channel-adapter
 import { MockCodexAdapter } from "../../src/codex/mock-codex-adapter.js";
 import { truncateDisplayText } from "../../src/codex/codex-cli.js";
 import { codexInputPlainText, normalizeCodexInput } from "../../src/codex/input.js";
-import type { CodexAdapter, CodexBackgroundEventHandler, CodexCollaborationMode, CodexCompactResult, CodexEvent, CodexGoal, CodexPromptInput, CodexRunOptions, CodexSession, CodexSessionContextUsage, CodexSessionStatus, CodexSessionSummary, CodexTurnInput, CodexUserInputQuestion, CodexUserInputResponse, StartSessionInput } from "../../src/codex/types.js";
+import type { CodexAdapter, CodexBackgroundEventHandler, CodexCollaborationMode, CodexCompactResult, CodexEvent, CodexGoal, CodexPromptInput, CodexRunOptions, CodexRunPolicyStatus, CodexSession, CodexSessionContextUsage, CodexSessionStatus, CodexSessionSummary, CodexTurnInput, CodexUserInputQuestion, CodexUserInputResponse, StartSessionInput } from "../../src/codex/types.js";
 import type { TranscriptSink } from "../../src/logging/transcript.js";
 import type { ChannelAttachment, ChannelCapabilities, ChannelMedia, ChannelMessage, ChannelTarget, SendResult } from "../../src/protocol/channel.js";
 import type { ChannelDeliveryPolicy } from "../../src/protocol/delivery-policy.js";
@@ -66,6 +66,15 @@ class ProgressCodexAdapter extends MockCodexAdapter {
   }
 }
 
+class NoAutoReviewCodexAdapter extends MockCodexAdapter {
+  override getRunPolicyStatus(sessionId?: string): CodexRunPolicyStatus {
+    return {
+      ...super.getRunPolicyStatus(sessionId),
+      supportedPermissionModes: ["approval", "full"],
+    };
+  }
+}
+
 class ToolProgressCodexAdapter extends MockCodexAdapter {
   override async *run(sessionId: string, _prompt: string): AsyncIterable<CodexEvent> {
     const turnId = `tool-progress-turn-${Date.now()}`;
@@ -85,6 +94,27 @@ class ToolProgressCodexAdapter extends MockCodexAdapter {
       progress: { phase: "end", itemId: "cmd-1", toolName: "command: npm test", status: "completed" },
     };
     yield { type: "assistant.completed", sessionId, turnId, text: "完成" };
+    yield { type: "turn.completed", sessionId, turnId };
+  }
+}
+
+class NotificationCodexAdapter extends MockCodexAdapter {
+  override async *run(sessionId: string, _prompt: string): AsyncIterable<CodexEvent> {
+    const turnId = `notification-turn-${Date.now()}`;
+    yield { type: "turn.started", sessionId, turnId };
+    yield {
+      type: "codex.notification",
+      sessionId,
+      turnId,
+      notification: {
+        method: "model/safetyBuffering/updated",
+        kind: "model",
+        text: "Codex 正在等待模型安全缓冲完成，回复可能会变慢。\nModel: gpt-next",
+        dedupeKey: `model/safetyBuffering/updated:${sessionId}`,
+        dedupeWindowMs: 5 * 60_000,
+      },
+    };
+    yield { type: "assistant.completed", sessionId, turnId, text: "通知测试完成" };
     yield { type: "turn.completed", sessionId, turnId };
   }
 }
@@ -137,6 +167,32 @@ class FixedGoalTimeCodexAdapter extends MockCodexAdapter {
 
   override async getGoal(sessionId: string): Promise<CodexGoal | null> {
     return this.fixedGoal ?? super.getGoal(sessionId);
+  }
+}
+
+class DirectoryHistoryCodexAdapter extends MockCodexAdapter {
+  private readonly history = new Map<string, CodexSessionSummary>();
+
+  addHistorySession(session: CodexSessionSummary): void {
+    this.history.set(session.id, session);
+  }
+
+  override async resumeSession(sessionId: string): Promise<CodexSession> {
+    const history = this.history.get(sessionId);
+    if (history) {
+      return {
+        id: history.id,
+        cwd: history.cwd ?? process.cwd(),
+        title: history.title,
+        createdAt: history.updatedAt,
+      };
+    }
+    return super.resumeSession(sessionId);
+  }
+
+  override async listSessions(routeKey?: string): Promise<CodexSessionSummary[]> {
+    const sessions = await super.listSessions(routeKey);
+    return routeKey ? sessions : [...sessions, ...this.history.values()];
   }
 }
 
@@ -893,7 +949,8 @@ test("Bridge exposes all sessions command for channel users", async () => {
   assert.ok(help.includes("按当前会话批准审批"));
   assert.ok(help.includes("- `/NO`: 拒绝当前审批。"));
   assert.ok(help.includes("拒绝当前审批"));
-  assert.ok(help.includes("- `/permission [approval|full confirm]`: 查看或切换当前绑定 Codex session 的权限模式。"));
+  assert.ok(help.includes("- `/session <id>`: 查看指定 Codex 会话详情，不切换绑定。"));
+  assert.ok(help.includes("- `/permission [approval|approve-for-me confirm|full confirm]`: 查看或切换当前绑定 Codex session 的权限模式。"));
   assert.equal(help.includes("/approve [id]"), false);
   assert.ok(help.includes("`/cancel`: 取消等待中的压缩确认。"));
   const allSessionsMessages = channel.sentMessages.filter((message) => message.text.startsWith("**Codex 会话**") && message.text.includes("范围: 全部可发现"));
@@ -916,6 +973,7 @@ test("Bridge supports /session alias and paginates session list commands", async
   await channel.emitText("/sessions all", { conversationId: "main" });
   await channel.emitText("/sessions all next", { conversationId: "main" });
   await channel.emitText("/session all prev", { conversationId: "main" });
+  await channel.emitText("/session mock-codex-1", { conversationId: "main" });
   await bridge.stop();
 
   const routeList = channel.sentMessages.find((message) => message.text.startsWith("**Codex 会话**") && message.text.includes("范围: 当前聊天"))?.text ?? "";
@@ -925,7 +983,60 @@ test("Bridge supports /session alias and paginates session list commands", async
   assert.ok(routeList.includes("Session: `mock-codex-1`（当前）"));
   assert.ok(allListPage1.includes("数量: `12`"));
   assert.ok(allListPage2.includes("数量: `12`"));
-  assert.ok(channel.sentMessages.at(-1)?.text.includes("页码: `1 / 2`"));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("页码: `1 / 2`")));
+  const detail = channel.sentMessages.at(-1)?.text ?? "";
+  assert.ok(detail.includes("**Codex 会话详情**"));
+  assert.ok(detail.includes("Session: `mock-codex-1`"));
+  assert.ok(detail.includes("预览: Mock preview for mock-codex-1"));
+  assert.ok(detail.includes("归属: 当前聊天"));
+});
+
+test("Bridge lets users browse sessions by cwd and bind a session from that directory", async () => {
+  const channel = new MockChannelAdapter();
+  const codex = new DirectoryHistoryCodexAdapter();
+  codex.addHistorySession({
+    id: "history-a-1",
+    title: "目录 A 较早任务",
+    cwd: "/repo/project-a",
+    status: { type: "idle" },
+    updatedAt: "2026-07-10T10:00:00.000Z",
+  });
+  codex.addHistorySession({
+    id: "history-b-1",
+    title: "目录 B 最新任务",
+    cwd: "/repo/project-b",
+    status: { type: "idle" },
+    updatedAt: "2026-07-11T10:00:00.000Z",
+  });
+  codex.addHistorySession({
+    id: "history-a-2",
+    title: "目录 A 较新任务",
+    cwd: "/repo/project-a",
+    status: { type: "idle" },
+    updatedAt: "2026-07-10T12:00:00.000Z",
+  });
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("/help");
+  await channel.emitText("/sessions cwd");
+  const directories = channel.sentMessages.at(-1)?.text ?? "";
+  await channel.emitText("1");
+  const sessions = channel.sentMessages.at(-1)?.text ?? "";
+  await channel.emitText("1");
+  await bridge.stop();
+
+  const help = channel.sentMessages.find((message) => message.text.startsWith("**可用命令**"))?.text ?? "";
+  assert.ok(help.includes("- `/sessions cwd`: 按工作目录浏览历史会话并选择切换。"));
+  assert.ok(directories.includes("**Codex 会话目录**"));
+  assert.ok(directories.includes("工作目录: `/repo/project-b`"));
+  assert.ok(directories.includes("会话数: `1`"));
+  assert.ok(directories.includes("可切换: `1`"));
+  assert.ok(sessions.includes("**目录下 Codex 会话**"));
+  assert.ok(sessions.includes("目录 B 最新任务"));
+  assert.ok(sessions.includes("Session: `history-b-1`"));
+  assert.ok(channel.sentMessages.at(-1)?.text.includes("已绑定 Codex 会话"));
+  assert.ok(channel.sentMessages.at(-1)?.text.includes("history-b-1"));
 });
 
 test("Bridge truncates long session titles in all sessions output", async () => {
@@ -969,8 +1080,34 @@ test("Bridge status includes session token context without channel identity deta
   assert.match(statusMessage, /最近一轮 token: 输入 `160,000`，缓存 `120,000`，输出 `4,171`，推理输出 `1,200`/);
   assert.match(statusMessage, /本会话累计 token: 总计 `34,375,973`，输入 `34,282,029`，缓存 `33,213,184`，输出 `93,944`，推理输出 `30,181`/);
   assert.doesNotMatch(statusMessage, /13303\.4%/);
+  assert.doesNotMatch(statusMessage, /排队消息: `0`/);
+  assert.doesNotMatch(statusMessage, /待投递补充消息: `0`/);
+  assert.doesNotMatch(statusMessage, /待处理附件: `0`/);
+  assert.doesNotMatch(statusMessage, /待审批: `0`/);
+  assert.doesNotMatch(statusMessage, /上下文压缩: 无/);
   assert.doesNotMatch(statusMessage, /mock:mock-account:direct:project-room/);
   assert.doesNotMatch(statusMessage, /Mock User \(alice\)/);
+});
+
+test("Bridge status includes recent Codex notification summary", async () => {
+  const channel = new MockChannelAdapter();
+  const codex = new NotificationCodexAdapter();
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("/new");
+  await codex.setSessionTitle("mock-codex-1", "状态诊断会话");
+  await channel.emitText("触发状态通知");
+  await bridge.waitForIdle();
+  await channel.emitText("/status");
+  await bridge.stop();
+
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("Codex 正在等待模型安全缓冲完成")));
+  const status = channel.sentMessages.at(-1)?.text ?? "";
+  assert.match(status, /会话标题: 状态诊断会话/);
+  assert.match(status, /最近通知:/);
+  assert.match(status, /模型: Codex 正在等待模型安全缓冲完成，回复可能会变慢。/);
+  assert.doesNotMatch(status, /channel:mock/);
 });
 
 test("Bridge model command lists actual models and is shown in help", async () => {
@@ -1003,7 +1140,7 @@ test("Bridge model command switches model and effort for the current session", a
 
   await bridge.start();
   await channel.emitText("/new");
-  await channel.emitText("/model gpt-next xhigh");
+  await channel.emitText("/model gpt-next max");
   await channel.emitText("/status");
   await channel.emitText("/model 2 high");
   await bridge.stop();
@@ -1011,7 +1148,7 @@ test("Bridge model command switches model and effort for the current session", a
   assert.deepEqual(codex.getModelPolicy("mock-codex-1"), { model: "gpt-next", reasoningEffort: "high" });
   assert.ok(channel.sentMessages.some((message) => message.text.includes("已设置 Codex 模型")));
   const status = channel.sentMessages.find((message) => message.text.includes("**Codex 状态**"))?.text ?? "";
-  assert.ok(status.includes("模型覆盖: 模型 `gpt-next`，思考程度 `xhigh`"));
+  assert.ok(status.includes("模型覆盖: 模型 `gpt-next`，思考程度 `max`"));
 });
 
 test("Bridge model command rejects unknown models and invalid or unsupported efforts", async () => {
@@ -1027,7 +1164,7 @@ test("Bridge model command rejects unknown models and invalid or unsupported eff
 
   assert.deepEqual(codex.getModelPolicy(), {});
   assert.ok(channel.sentMessages.some((message) => message.text.includes("未找到模型: `gpt-missing`")));
-  assert.ok(channel.sentMessages.some((message) => message.text.includes("未知思考程度: `impossible`")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("模型 `gpt-next` 不支持思考程度 `impossible`")));
   assert.ok(channel.sentMessages.some((message) => message.text.includes("模型 `gpt-test` 不支持思考程度 `xhigh`")));
 });
 
@@ -1102,6 +1239,7 @@ test("Bridge manages experimental goal commands for the current session", async 
   assert.ok(help.includes("恢复 Goal，继续按已暂停的目标推进"));
   assert.ok(help.includes("  - `/goal clear`: 清除 Goal"));
   assert.ok(help.includes("清除 Goal，退出当前会话的 Goal 追踪"));
+  assert.ok(help.includes("状态可能显示为：进行中、已暂停、已阻塞、已达用量限制、已达预算、已完成。"));
   assert.ok(channel.sentMessages.some((message) => message.text.includes("当前没有绑定 Codex 会话，也没有 Goal")));
   assert.ok(channel.sentMessages.some((message) => message.text.includes("已设置 Goal")));
   const status = channel.sentMessages.find((message) => message.text.includes("**Codex 状态**"))?.text ?? "";
@@ -1634,7 +1772,7 @@ test("Bridge cancels pending media with /cancel", async () => {
 
   assert.deepEqual(codex.prompts, []);
   assert.ok(channel.sentMessages.some((message) => message.text.includes("已取消 1 个待处理附件")));
-  assert.match(channel.sentMessages.at(-1)?.text ?? "", /待处理附件: `0`/);
+  assert.doesNotMatch(channel.sentMessages.at(-1)?.text ?? "", /待处理附件: `0`/);
 });
 
 test("Bridge clears pending media with /stop", async () => {
@@ -1650,7 +1788,7 @@ test("Bridge clears pending media with /stop", async () => {
   await bridge.stop();
 
   assert.ok(channel.sentMessages.some((message) => message.text.includes("已清空 1 个待处理附件")));
-  assert.match(channel.sentMessages.at(-1)?.text ?? "", /待处理附件: `0`/);
+  assert.doesNotMatch(channel.sentMessages.at(-1)?.text ?? "", /待处理附件: `0`/);
 });
 
 test("Bridge steers text plus image into the active route turn", async () => {
@@ -2716,18 +2854,40 @@ test("Bridge permission command shows and changes Codex run policy", async () =>
 
   await bridge.start();
   await channel.emitText("/permission");
-  await channel.emitText("/permission full");
+  await channel.emitText("/permission readonly");
   assert.equal(codex.getRunPolicy().permissionMode, "approval");
+  await channel.emitText("/permission approve-for-me");
+  assert.equal(codex.getRunPolicy().permissionMode, "approval");
+  await channel.emitText("/permission approve-for-me confirm");
+  assert.equal(codex.getRunPolicy().permissionMode, "approve-for-me");
+  await channel.emitText("/permission full");
+  assert.equal(codex.getRunPolicy().permissionMode, "approve-for-me");
   await channel.emitText("/permission full confirm");
   await channel.emitText("/status");
   await channel.emitText("/permission approval");
   await bridge.stop();
 
   assert.ok(channel.sentMessages.some((message) => message.text.includes("当前模式: `approval sandbox=workspace-write`")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("未知权限模式")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("Approve for me 会让 Codex 自动审阅审批请求")));
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("已切换 Codex 权限模式: approve-for-me")));
   assert.ok(channel.sentMessages.some((message) => message.text.includes("/permission full confirm")));
   assert.ok(channel.sentMessages.some((message) => message.text.includes("已切换 Codex 权限模式: full")));
   assert.ok(channel.sentMessages.some((message) => message.text.includes("权限模式: 完全权限")));
   assert.equal(codex.getRunPolicy().permissionMode, "approval");
+});
+
+test("Bridge permission command rejects approve-for-me when adapter does not support it", async () => {
+  const channel = new MockChannelAdapter();
+  const codex = new NoAutoReviewCodexAdapter();
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("/permission approve-for-me confirm");
+  await bridge.stop();
+
+  assert.equal(codex.getRunPolicy().permissionMode, "approval");
+  assert.ok(channel.sentMessages.some((message) => message.text.includes("当前 Codex Adapter 不支持 Approve for me")));
 });
 
 test("Bridge permission command scopes changes to the current bound session", async () => {

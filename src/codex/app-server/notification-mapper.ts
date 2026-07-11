@@ -2,6 +2,12 @@ import type { CodexProgressKind } from "../types.js";
 import { commandExecutionProgress } from "./command-output-summary.js";
 import { arrayValue, numberValue, objectValue, stringValue } from "./value-parsers.js";
 
+export interface AppServerReconnectNotice {
+  message: string;
+  attempt: number;
+  total: number;
+}
+
 export function messagePhaseValue(value: unknown): "commentary" | "final_answer" | undefined {
   return value === "commentary" || value === "final_answer" ? value : undefined;
 }
@@ -67,6 +73,17 @@ export function appServerErrorMessage(params: Record<string, unknown>): string {
     ?? "codex app-server error";
 }
 
+export function parseAppServerReconnectNotice(message: string): AppServerReconnectNotice | undefined {
+  const normalized = message.trim();
+  const match = /^Reconnecting\.\.\.\s+(\d+)\/(\d+)\b/i.exec(normalized);
+  if (!match) return undefined;
+  const attempt = Number(match[1]);
+  const total = Number(match[2]);
+  if (!Number.isSafeInteger(attempt) || !Number.isSafeInteger(total)) return undefined;
+  if (attempt <= 0 || total <= 0 || attempt > total) return undefined;
+  return { message: normalized, attempt, total };
+}
+
 export function isTransientAppServerError(message: string): boolean {
-  return /^Reconnecting\.\.\.\s+\d+\/\d+/i.test(message.trim());
+  return parseAppServerReconnectNotice(message) !== undefined;
 }

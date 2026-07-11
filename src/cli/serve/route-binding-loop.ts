@@ -223,14 +223,17 @@ async function configureBoundSessionPermission(
     `当前: ${formatRunPolicyForUser(current)}`,
     "",
     "1. 审批模式（推荐）",
-    "2. 完全权限（高风险，需要输入 YES）",
+    "2. Approve for me（自动审阅）",
+    "3. 完全权限（高风险，需要输入 YES）",
     "0. 返回",
   ].join("\n"));
   const answer = normalizeText(await rl.question("请选择 [0 返回]: "));
   if (!answer || answer === "0" || isBackText(answer)) return;
-  const policy: CodexRunPolicy = answer === "2" || answer === "full"
+  const policy: CodexRunPolicy = answer === "3" || answer === "full"
     ? { permissionMode: "full" }
-    : { permissionMode: "approval", sandbox: "workspace-write" };
+    : answer === "2" || answer === "approve-for-me" || answer === "auto"
+      ? { permissionMode: "approve-for-me", sandbox: "workspace-write" }
+      : { permissionMode: "approval", sandbox: "workspace-write" };
   if (policy.permissionMode === "full") {
     try {
       await confirmFullPermission(rl, false);

@@ -212,6 +212,7 @@ test("ExecCodexAdapter reports non-interactive approval support", () => {
   assert.equal(status.policy.permissionMode, "approval");
   assert.equal(status.interactiveApprovals, false);
   assert.equal(status.effectiveApprovalPolicy, "never");
+  assert.deepEqual(status.supportedPermissionModes, ["approval", "full"]);
   assert.match(status.note ?? "", /非交互模式/);
 });
 

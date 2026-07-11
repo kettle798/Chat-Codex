@@ -70,7 +70,7 @@ export function HomeView({ dashboard, selected }: { dashboard: LauncherDashboard
     ["8. 启动服务", dashboard.canStart.ok ? "启动并进入运行日志" : "需处理配置"],
   ];
   return (
-    <Frame title={chatCodexTitle()} subtitle={`状态: ${dashboard.canStart.ok ? "可启动" : "需配置"}  权限: ${dashboard.startup.policy.permissionMode === "full" ? "完全" : "审批"}`} borderColor={dashboard.canStart.ok ? THEME.success : THEME.warning}>
+    <Frame title={chatCodexTitle()} subtitle={`状态: ${dashboard.canStart.ok ? "可启动" : "需配置"}  权限: ${formatPermissionShort(dashboard.startup.policy)}`} borderColor={dashboard.canStart.ok ? THEME.success : THEME.warning}>
       <Section title="信息展示">
         <CodexCliStatusBlock status={dashboard.startup.codexStatus} />
         <KeyValue label="渠道" value={`${enabledChannels}/${dashboard.channels.length} 已启用`} />
@@ -465,7 +465,11 @@ export function PairingDetailView({ pairing, selected }: { pairing?: PairingRout
       <KeyValue label="Route" value={pairing.route.routeKey} />
       <KeyValue label="渠道" value={`${pairing.route.channelId} / ${pairing.route.accountId}`} />
       <KeyValue label="最近活跃" value={formatFullDateTime(pairing.route.lastSeenAt ?? pairing.route.updatedAt)} />
-      <KeyValue label="当前绑定" value={pairing.activeSession ? formatSession(pairing.activeSession) : "未绑定"} />
+      <KeyValue label="当前绑定" value={pairing.activeSession ? "已绑定 Codex session" : "未绑定"} />
+      {pairing.activeSession ? <KeyValue label="当前 session" value={formatSession(pairing.activeSession)} /> : null}
+      {pairing.activeSession ? <KeyValue label="Session ID" value={pairing.activeSession.id} /> : null}
+      {pairing.activeSession?.updatedAt ? <KeyValue label="Session 活跃" value={formatSessionActiveTime(pairing.activeSession.updatedAt, "full")} /> : null}
+      {pairing.activeSession?.cwd ? <KeyValue label="Session 目录" value={pairing.activeSession.cwd} /> : null}
       {trusted ? (
         <Section title="信任记录">
           <KeyValue label="信任时间" value={formatFullDateTime(trusted.trustedAt)} />
@@ -534,12 +538,13 @@ export function ManualSessionView({ value, onChange, onSubmit }: { value: string
 export function PermissionView({ target, startupPolicy, sessionPolicy, selected }: { target: PermissionTarget; startupPolicy: CodexRunPolicy; sessionPolicy?: CodexRunPolicy; selected: number }): React.JSX.Element {
   const current = target.kind === "default" ? startupPolicy : sessionPolicy ?? startupPolicy;
   return (
-    <Frame title={target.kind === "default" ? "默认权限设置" : "当前 session 权限"} subtitle="Enter 保存  Esc 返回">
+    <Frame title={target.kind === "default" ? "默认权限设置" : "当前 session 权限"} subtitle="Enter 保存  自动审阅/完全权限需确认  Esc 返回">
       {target.kind === "session" ? <KeyValue label="Session" value={formatSession(target.session)} /> : null}
       <KeyValue label="当前" value={formatPermission(current)} />
       <Section title="选项">
         <ListRow active={selected === 0} left="1. 审批模式（推荐）" tone="success" />
-        <ListRow active={selected === 1} left="2. 完全权限（高风险）" tone="danger" />
+        <ListRow active={selected === 1} left="2. Approve for me（自动审阅）" tone="warning" />
+        <ListRow active={selected === 2} left="3. 完全权限（高风险）" tone="danger" />
       </Section>
     </Frame>
   );
@@ -716,4 +721,10 @@ function feishuDirectRoute(route: PairingRouteSummary["route"]): boolean {
       || route.channelId.startsWith("feishu-")
       || route.channelId === "lark"
       || route.channelId.startsWith("lark-"));
+}
+
+function formatPermissionShort(policy: CodexRunPolicy): string {
+  if (policy.permissionMode === "full") return "完全";
+  if (policy.permissionMode === "approve-for-me") return "自动审阅";
+  return "审批";
 }

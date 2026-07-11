@@ -92,6 +92,9 @@ export function createRealCodexAdapter(startup: PreparedServeStartup): CodexAdap
   }
   const runPolicy = startup.policy;
   if (startup.adapterMode === "exec") {
+    if (runPolicy.permissionMode === "approve-for-me") {
+      throw new Error("Codex exec 不支持 Approve for me，请切换到 app-server 或使用审批模式。");
+    }
     return new ExecCodexAdapter({ runPolicy, codexCommand: startup.codexStatus?.command });
   }
   return new AppServerCodexAdapter({ runPolicy, codexCommand: startup.codexStatus?.command });

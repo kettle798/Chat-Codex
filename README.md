@@ -240,6 +240,7 @@ Codex CLI / Codex app-server
 | `/use [session\|编号]` | 切换当前 route 的 active session |
 | `/sessions` | 查看当前 route 拥有或绑定过的 session |
 | `/sessions all` | 查看本机可发现的 Codex 历史 session |
+| `/session <id>` | 查看指定 Codex session 详情，不切换绑定 |
 | `/status` | 查看 session、模型、token、队列、审批、权限和渠道状态 |
 | `/whoami` | 查看当前 channel、route、sender 和 conversation 信息 |
 | `/debug` | 查看调试状态 |
@@ -249,6 +250,7 @@ Codex CLI / Codex app-server
 | `/NO` | 拒绝当前 route 最新 pending approval |
 | `/permission` | 查看当前 session 权限 |
 | `/permission approval` | 切回审批模式 |
+| `/permission approve-for-me confirm` | 切到自动审阅审批模式 |
 | `/permission full confirm` | 切到完全权限 |
 | `/plan` / `/plan <任务>` | 进入计划模式，或以计划模式处理任务；计划模式默认低频展示 Codex 旁白 |
 | `/code` / `/code <任务>` | 切回执行模式，或以执行模式处理任务 |

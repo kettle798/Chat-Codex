@@ -36,6 +36,7 @@ import {
   formatProgressModeForStatus,
   formatRunPolicy,
   formatRunPolicyForStatus,
+  truncateForChannel,
   formatUnboundSessionForStatus,
 } from "./formatters.js";
 import { formatProgressModeChoices, isProgressModeAllowedByPolicy } from "./progress-modes.js";
@@ -47,6 +48,7 @@ import {
   sessionListStateExpired,
   sessionPageAction,
 } from "./session-list.js";
+import { sessionDetailText as buildSessionDetailText } from "./session-detail.js";
 
 export interface BridgeStatusTextOptions {
   channels: ChannelRegistry;
@@ -125,6 +127,9 @@ export class BridgeStatusText {
     const compactState = this.compactStateForRoute(routeKey);
     const compactRunning = compactState.type === "running";
     const workerRunning = this.isRouteBusy(routeKey) || compactRunning;
+    const queueLength = this.routeQueueLength(routeKey);
+    const steerPendingCount = this.routeSteerPendingCount(routeKey);
+    const mediaCount = this.pendingMediaCount(routeKey);
     const policyStatus = this.runPolicyStatus(binding?.sessionId);
     const policy = policyStatus?.policy ?? this.codex.getRunPolicy?.(binding?.sessionId);
     const modelPolicy = this.codex.getModelPolicy?.(binding?.sessionId);
@@ -132,8 +137,10 @@ export class BridgeStatusText {
     const goal = binding && this.codex.getGoal
       ? await this.codex.getGoal(binding.sessionId).catch(() => undefined)
       : undefined;
+    const sessionTitle = formatSessionTitleForStatus(localSession?.session.title);
     const sessionLines = [
       `- 当前会话: ${binding ? `\`${binding.sessionId}\`` : formatUnboundSessionForStatus(pendingInitialBinding)}`,
+      binding && sessionTitle ? `- 会话标题: ${sessionTitle}` : undefined,
       `- 运行状态: ${formatCodexStatus(sessionStatus)}`,
       `- 当前模型: ${formatModelInfoForStatus(sessionStatus.model)}`,
       ...formatContextUsageLines(sessionStatus.context),
@@ -142,19 +149,20 @@ export class BridgeStatusText {
     const runtimeLines = [
       `- 处理状态: ${workerRunning ? "正在处理" : "空闲"}`,
       formatCurrentTurnDurationLine(sessionStatus),
-      `- 排队消息: \`${this.routeQueueLength(routeKey)}\``,
-      `- 待投递补充消息: \`${this.routeSteerPendingCount(routeKey)}\``,
-      `- 待处理附件: \`${this.pendingMediaCount(routeKey)}\``,
+      queueLength > 0 ? `- 排队消息: \`${queueLength}\`` : undefined,
+      steerPendingCount > 0 ? `- 待投递补充消息: \`${steerPendingCount}\`` : undefined,
+      mediaCount > 0 ? `- 待处理附件: \`${mediaCount}\`` : undefined,
       ...formatCompactStatusLines(compactState),
       `- 协作模式: ${formatCollaborationModeForStatus(this.collaborationModeForRoute(routeKey, binding?.sessionId))}`,
       `- 上下文刷新: ${formatContextRefreshEffectivePolicyForUser(this.contextRefreshFor(routeKey))}`,
       ...formatGoalStatusLines(goal),
-      `- 待审批: \`${approvals.length}\``,
+      approvals.length > 0 ? `- 待审批: \`${approvals.length}\`` : undefined,
       ...formatPendingApprovalStatus(approvals.at(-1)),
       this.progressStatusLine(routeKey, deliveryPolicy),
       modelPolicy ? `- 模型覆盖: ${formatModelPolicyForStatus(modelPolicy)}` : undefined,
       policy ? `- 权限模式: ${formatRunPolicyForStatus(policy)}` : undefined,
       policyStatus && !policyStatus.interactiveApprovals ? `- 审批入口: ${formatApprovalSupport(policyStatus)}` : undefined,
+      ...formatRecentNotificationLines(binding?.sessionId ? this.state.listRecentCodexNotifications(binding.sessionId) : []),
       compactRunning ? "- 可用操作: 等待上下文压缩完成；当前不支持中途取消 /compact" : undefined,
       workerRunning && binding && !compactRunning ? "- 可用操作: 发送 `/stop` 终止当前任务" : undefined,
     ];
@@ -206,6 +214,15 @@ export class BridgeStatusText {
         ? "未发现 Codex 历史会话。发送 `/new` 创建新会话。"
         : "当前聊天暂无 Codex 会话。发送 `/new` 创建新会话，或发送 `/resume` 进入会话选择。",
       pageCommand: request.scope === "all" ? "/sessions all" : "/sessions",
+    });
+  }
+
+  async sessionDetailText(message: ChannelMessage, sessionId: string): Promise<string> {
+    return buildSessionDetailText({
+      state: this.state,
+      codex: this.codex,
+      message,
+      sessionId,
     });
   }
 
@@ -275,6 +292,8 @@ export class BridgeStatusText {
         : []),
       { command: "/sessions", description: "列出当前聊天上下文拥有、绑定过或本地记录相关的 Codex 会话。" },
       { command: "/sessions all", description: "列出本机全部可发现的 Codex 历史会话。" },
+      { command: "/sessions cwd", description: "按工作目录浏览历史会话并选择切换。" },
+      { command: "/session <id>", description: "查看指定 Codex 会话详情，不切换绑定。" },
       { command: "/resume [session|编号]", description: "恢复并绑定已有会话；不带参数时进入编号选择。" },
       { command: "/use [session|编号]", description: "切换到已有会话；不带参数时进入编号选择。" },
       ...(isFeishuGroupMessage(message) ? [] : [{ command: "/whoami", description: "查看当前通道身份。" }]),
@@ -288,6 +307,7 @@ export class BridgeStatusText {
           "`/goal pause`: 暂停 Goal，保留目标但暂时不让 Codex 按它持续推进。",
           "`/goal resume`: 恢复 Goal，继续按已暂停的目标推进。",
           "`/goal clear`: 清除 Goal，退出当前会话的 Goal 追踪。",
+          "状态可能显示为：进行中、已暂停、已阻塞、已达用量限制、已达预算、已完成。",
         ],
       },
       {
@@ -311,7 +331,7 @@ export class BridgeStatusText {
         details: ["`/compact confirm`: 确认并开始压缩。", "`/cancel`: 取消等待中的压缩确认。"],
       },
       { command: "/model [模型|编号] [effort]", description: "查看可用模型，或切换当前 Codex session 后续任务的模型和思考程度。" },
-      { command: "/permission [approval|full confirm]", description: "查看或切换当前绑定 Codex session 的权限模式。" },
+      { command: "/permission [approval|approve-for-me confirm|full confirm]", description: "查看或切换当前绑定 Codex session 的权限模式。" },
       { command: "/OK", description: "批准当前审批。" },
       { command: "/P", description: "按当前会话批准审批，后续同类操作尽量不再询问。" },
       { command: "/NO", description: "拒绝当前审批。" },
@@ -388,7 +408,7 @@ export class BridgeStatusText {
       "**可用模型**",
       ...(models.length > 0 ? models.map(formatModelOptionLine) : ["无可用模型。"]),
       "",
-      "用法: `/model gpt-5.5 xhigh`、`/model 2 high`、`/model effort medium`、`/model default`。",
+      "用法: `/model 2 max`、`/model <模型> high`、`/model effort medium`、`/model default`。",
       "发送 `/model all` 可包含隐藏模型。",
     ].join("\n");
   }
@@ -401,9 +421,13 @@ export class BridgeStatusText {
       `- 作用范围: ${sessionId ? `当前会话 \`${sessionId}\`` : "默认策略（后续新会话）"}`,
       `- 当前模式: \`${policy ? formatRunPolicy(policy) : "unknown"}\``,
       policyStatus ? `- 审批支持: ${formatApprovalSupport(policyStatus)}` : undefined,
+      policyStatus?.effectiveApprovalsReviewer !== undefined ? `- Codex 侧审批人: \`${policyStatus.effectiveApprovalsReviewer ?? "none"}\`` : undefined,
+      policyStatus?.effectiveSandbox ? `- Codex 侧沙箱: \`${policyStatus.effectiveSandbox}\`` : undefined,
       "- `approval`: 使用 `workspace-write` sandbox；是否能在微信里弹审批取决于 Codex adapter。",
+      "- `approve-for-me`: 使用 `workspace-write` sandbox；审批请求交给 Codex 自动审阅。",
       "- `full`: 完全权限，跳过审批和沙箱，风险很高。",
       "- 切回安全沙箱模式: `/permission approval`",
+      "- 切到自动审阅模式: `/permission approve-for-me confirm`",
       "- 切到完全权限: `/permission full confirm`",
       policyStatus?.note ? `- 说明: ${policyStatus.note}` : undefined,
     ].filter(Boolean).join("\n");
@@ -523,8 +547,14 @@ function isSameActiveTurn(left: CodexSessionStatus, right: CodexSessionStatus): 
   return !leftTurnId || !rightTurnId || leftTurnId === rightTurnId;
 }
 
+function formatSessionTitleForStatus(title: string | undefined): string | undefined {
+  const normalized = title?.replace(/\s+/g, " ").trim();
+  if (!normalized || normalized.startsWith("channel:")) return undefined;
+  return truncateForChannel(normalized, 80);
+}
+
 function formatCompactStatusLines(state: CompactState): string[] {
-  if (state.type === "none") return ["- 上下文压缩: 无"];
+  if (state.type === "none") return [];
   if (state.type === "confirming") {
     return [
       "- 上下文压缩: 等待确认",
@@ -536,4 +566,41 @@ function formatCompactStatusLines(state: CompactState): string[] {
     "- 上下文压缩: 进行中",
     `- 压缩会话: \`${state.sessionId}\``,
   ];
+}
+
+function formatRecentNotificationLines(
+  notifications: ReturnType<MemoryStateStore["listRecentCodexNotifications"]>,
+): string[] {
+  if (notifications.length === 0) return [];
+  return [[
+    "  - 最近通知:",
+    ...notifications.map((notification) => {
+      const firstLine = notification.text.split(/\r?\n/, 1)[0]?.trim() || notification.method;
+      return `    - ${formatNotificationKindForStatus(notification.kind)}: ${truncateForChannel(firstLine, 96)}（${formatNotificationTime(notification.occurredAt)}）`;
+    }),
+  ].join("\n")];
+}
+
+function formatNotificationKindForStatus(kind: ReturnType<MemoryStateStore["listRecentCodexNotifications"]>[number]["kind"]): string {
+  switch (kind) {
+    case "security": return "安全";
+    case "warning": return "警告";
+    case "model": return "模型";
+    case "config": return "配置";
+    case "lifecycle": return "会话";
+    case "deprecation": return "兼容性";
+    case "connection": return "连接";
+  }
+}
+
+function formatNotificationTime(occurredAt: string): string {
+  const timestamp = Date.parse(occurredAt);
+  if (!Number.isFinite(timestamp)) return "时间未知";
+  return new Date(timestamp).toLocaleString("zh-CN", {
+    hour12: false,
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }

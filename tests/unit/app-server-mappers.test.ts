@@ -6,11 +6,12 @@ import { approvalFromServerRequest, approvalKindForMethod, responseForApprovalDe
 import { goalFromResponse, goalFromSetResponse } from "../../src/codex/app-server/goal-api.js";
 import { appServerUserInput, localFileInputText } from "../../src/codex/app-server/input-mapper.js";
 import { modelInfoFromResponse, modelInfoWithPolicy, modelsFromListResponse, parseTokenUsage, withoutModelInfo } from "../../src/codex/app-server/model-policy.js";
-import { appServerErrorMessage, isTransientAppServerError, messagePhaseValue, progressFromThreadItem, shouldFlushProgressDraft, textFromPlan } from "../../src/codex/app-server/notification-mapper.js";
+import { appServerErrorMessage, isTransientAppServerError, messagePhaseValue, parseAppServerReconnectNotice, progressFromThreadItem, shouldFlushProgressDraft, textFromPlan } from "../../src/codex/app-server/notification-mapper.js";
 import { APP_SERVER_PROTOCOL_CAPABILITIES, type AppServerProtocolDirection } from "../../src/codex/app-server/protocol-capabilities.js";
 import { approvalPolicyForRunPolicy, approvalsReviewerForRunPolicy, cloneRunPolicy, sandboxModeForRunPolicy, sandboxPolicyForRunPolicy } from "../../src/codex/app-server/run-policy.js";
 import { contextFromServerRequestParams, unsupportedServerRequestResponse, userInputRequestFromServerRequest } from "../../src/codex/app-server/server-request-mapper.js";
 import { collaborationModePayload, truncatePrompt, withContext, withModelPolicy } from "../../src/codex/app-server/session-status.js";
+import { sessionSummaryFromThread } from "../../src/codex/app-server/thread-list.js";
 import { AsyncEventQueue, createTurnQueueRecord, shouldCreateBackgroundTurn } from "../../src/codex/app-server/turn-store.js";
 import { arrayValue, isoFromSeconds, numberValue, objectValue, objectValueOrNull, stringValue } from "../../src/codex/app-server/value-parsers.js";
 
@@ -29,13 +30,17 @@ test("app-server value parsers keep narrow coercion semantics", () => {
 
 test("app-server run policy maps permissions to app-server payloads", () => {
   const approval = { permissionMode: "approval", sandbox: "workspace-write" } as const;
+  const approveForMe = { permissionMode: "approve-for-me", sandbox: "workspace-write" } as const;
   const full = { permissionMode: "full" } as const;
   assert.notEqual(cloneRunPolicy(approval), approval);
   assert.equal(approvalPolicyForRunPolicy(approval), "on-request");
+  assert.equal(approvalPolicyForRunPolicy(approveForMe), "on-request");
   assert.equal(approvalPolicyForRunPolicy(full), "never");
   assert.equal(approvalsReviewerForRunPolicy(approval), "user");
+  assert.equal(approvalsReviewerForRunPolicy(approveForMe), "auto_review");
   assert.equal(approvalsReviewerForRunPolicy(full), null);
   assert.equal(sandboxModeForRunPolicy(approval), "workspace-write");
+  assert.equal(sandboxModeForRunPolicy(approveForMe), "workspace-write");
   assert.equal(sandboxModeForRunPolicy(full), "danger-full-access");
   assert.deepEqual(sandboxPolicyForRunPolicy({ permissionMode: "approval", sandbox: "read-only" }, "/repo"), { type: "readOnly", networkAccess: false });
   assert.deepEqual(sandboxPolicyForRunPolicy(full, "/repo"), { type: "dangerFullAccess" });
@@ -173,8 +178,36 @@ test("app-server goal mapper accepts camel and snake case responses", () => {
     updatedAt: 2,
   });
   assert.equal(goalFromResponse({ status: "bad" }).status, "active");
+  assert.equal(goalFromResponse({ status: "blocked" }).status, "blocked");
+  assert.equal(goalFromResponse({ status: "usageLimited" }).status, "usageLimited");
   assert.equal(goalFromSetResponse({ goal: { threadId: "thread-2" } }).threadId, "thread-2");
   assert.throws(() => goalFromSetResponse({}), /未返回 Goal/);
+});
+
+test("app-server thread list mapper converts thread metadata to session summaries", () => {
+  assert.deepEqual(sessionSummaryFromThread({
+    id: "thread-1",
+    name: "修复 /sessions",
+    preview: "fallback preview",
+    cwd: "/repo/chat-codex",
+    recencyAt: 1800000000,
+    updatedAt: 1700000000,
+    createdAt: 1600000000,
+    status: { type: "active", activeFlags: ["goal"] },
+  }), {
+    id: "thread-1",
+    title: "修复 /sessions",
+    cwd: "/repo/chat-codex",
+    status: { type: "running", task: "goal" },
+    updatedAt: "2027-01-15T08:00:00.000Z",
+  });
+  assert.equal(sessionSummaryFromThread({ preview: "missing id" }), undefined);
+  assert.deepEqual(sessionSummaryFromThread({
+    id: "thread-2",
+    preview: "只有 preview",
+    updatedAt: 1700000000,
+    status: { type: "notLoaded" },
+  })?.status, { type: "unknown", detail: "not loaded" });
 });
 
 test("app-server input mapper preserves text, local images, and file instructions", () => {
@@ -211,9 +244,15 @@ test("app-server model and token mappers preserve response parsing", () => {
       id: "fake",
       model: "fake",
       display_name: "Fake",
-      supported_reasoning_efforts: ["low", { reasoning_effort: "medium", description: "Medium" }, "bad"],
-      default_reasoning_effort: "high",
+      supported_reasoning_efforts: ["low", { reasoning_effort: "medium", description: "Medium" }, "max", "bad value!"],
+      default_reasoning_effort: "ultra",
+      input_modalities: ["text", "image"],
+      supports_personality: true,
       service_tiers: [{ id: "default", name: "Default" }],
+      default_service_tier: "default",
+      upgrade: "newer",
+      upgrade_info: { model: "newer" },
+      availability_nux: { message: "available" },
       hidden: true,
       isDefault: false,
     }],
@@ -221,10 +260,16 @@ test("app-server model and token mappers preserve response parsing", () => {
     id: "fake",
     model: "fake",
     displayName: "Fake",
+    upgrade: "newer",
+    upgradeInfo: { model: "newer" },
+    availabilityNux: { message: "available" },
     hidden: true,
-    supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "medium", description: "Medium" }, { reasoningEffort: "high" }],
-    defaultReasoningEffort: "high",
+    supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "medium", description: "Medium" }, { reasoningEffort: "max" }, { reasoningEffort: "ultra" }],
+    defaultReasoningEffort: "ultra",
+    inputModalities: ["text", "image"],
+    supportsPersonality: true,
     serviceTiers: [{ id: "default", name: "Default" }],
+    defaultServiceTier: "default",
     isDefault: false,
   }]);
   assert.deepEqual(parseTokenUsage({
@@ -266,7 +311,20 @@ test("app-server notification helpers map progress and errors", () => {
   assert.equal(shouldFlushProgressDraft("一句话。"), true);
   assert.equal(shouldFlushProgressDraft("short"), false);
   assert.equal(appServerErrorMessage({ error: { message: "bad" } }), "bad");
+  assert.deepEqual(parseAppServerReconnectNotice("Reconnecting... 1/5"), {
+    message: "Reconnecting... 1/5",
+    attempt: 1,
+    total: 5,
+  });
+  assert.deepEqual(parseAppServerReconnectNotice(" Reconnecting... 5/5 "), {
+    message: "Reconnecting... 5/5",
+    attempt: 5,
+    total: 5,
+  });
+  assert.equal(parseAppServerReconnectNotice("Reconnecting... 6/5"), undefined);
+  assert.equal(parseAppServerReconnectNotice("Disconnected"), undefined);
   assert.equal(isTransientAppServerError("Reconnecting... 1/5"), true);
+  assert.equal(isTransientAppServerError("Reconnecting... 0/5"), false);
 });
 
 test("app-server turn store preserves queue and background rules", async () => {

@@ -656,7 +656,12 @@ export class LauncherActions {
       throw new Error(`Codex 不可用: ${this.startup.codexStatus.error ?? "unknown error"}`);
     }
     const runPolicy = this.startup.policy;
-    if (this.startup.adapterMode === "exec") return new ExecCodexAdapter({ runPolicy, codexCommand: this.startup.codexStatus?.command });
+    if (this.startup.adapterMode === "exec") {
+      if (runPolicy.permissionMode === "approve-for-me") {
+        throw new Error("Codex exec 不支持 Approve for me，请切换到 app-server 或使用审批模式。");
+      }
+      return new ExecCodexAdapter({ runPolicy, codexCommand: this.startup.codexStatus?.command });
+    }
     return new AppServerCodexAdapter({ runPolicy, codexCommand: this.startup.codexStatus?.command });
   }
 

@@ -12,7 +12,7 @@ export function maxSelectableIndex(screen: Screen, channels: LauncherDashboard["
   }
   if (screen.name === "bindingDetail") return 4;
   if (screen.name === "pairingDetail") return 2;
-  if (screen.name === "permission") return 1;
+  if (screen.name === "permission") return 2;
   if (screen.name === "contextRefresh") return screen.target.kind === "route" ? 3 : 2;
   if (screen.name === "workdir") return 1;
   return 30;
