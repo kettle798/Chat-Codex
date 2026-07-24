@@ -8,6 +8,7 @@ import { truncateDisplayText } from "../../src/codex/codex-cli.js";
 import { codexInputPlainText, normalizeCodexInput } from "../../src/codex/input.js";
 import type { CodexAdapter, CodexBackgroundEventHandler, CodexCollaborationMode, CodexCompactResult, CodexEvent, CodexGoal, CodexPromptInput, CodexRunOptions, CodexRunPolicyStatus, CodexSession, CodexSessionContextUsage, CodexSessionStatus, CodexSessionSummary, CodexTurnInput, CodexUserInputQuestion, CodexUserInputResponse, StartSessionInput } from "../../src/codex/types.js";
 import type { TranscriptSink } from "../../src/logging/transcript.js";
+import type { Logger } from "../../src/logging/logger.js";
 import type { ChannelAttachment, ChannelCapabilities, ChannelMedia, ChannelMessage, ChannelTarget, SendResult } from "../../src/protocol/channel.js";
 import type { ChannelDeliveryPolicy } from "../../src/protocol/delivery-policy.js";
 import { currentTimeZone, formatLocalDateTimeWithZone } from "../../src/time/display-time.js";
@@ -55,6 +56,18 @@ class CapturingTranscriptSink implements TranscriptSink {
   }
 }
 
+class CapturingLogger implements Logger {
+  readonly errors: Array<{ message: string; meta?: Record<string, unknown> }> = [];
+
+  info(): void {}
+  warn(): void {}
+  debug(): void {}
+
+  error(message: string, meta?: Record<string, unknown>): void {
+    this.errors.push({ message, meta });
+  }
+}
+
 class ProgressCodexAdapter extends MockCodexAdapter {
   override async *run(sessionId: string, _prompt: string): AsyncIterable<CodexEvent> {
     const turnId = `progress-turn-${Date.now()}`;
@@ -72,6 +85,38 @@ class NoAutoReviewCodexAdapter extends MockCodexAdapter {
       ...super.getRunPolicyStatus(sessionId),
       supportedPermissionModes: ["approval", "full"],
     };
+  }
+}
+
+class InvalidCwdCodexAdapter extends MockCodexAdapter {
+  readonly cwdRuns: string[] = [];
+
+  override async *run(_sessionId: string, prompt: CodexPromptInput): AsyncIterable<CodexEvent> {
+    this.cwdRuns.push(codexInputPlainText(prompt));
+    throw new Error("invalid cwd: Operation not permitted (os error 1)");
+  }
+
+  getCwdDiagnostic(sessionId?: string) {
+    return {
+      source: "turn/start" as const,
+      error: "invalid cwd: Operation not permitted (os error 1)",
+      observedAt: "2026-07-24T00:00:00.000Z",
+      ...(sessionId ? { sessionId } : {}),
+      requestCwd: {
+        cwd: "/diagnostic/session-cwd",
+        state: "unavailable" as const,
+        error: "Operation not permitted",
+      },
+      inheritedProcessCwd: {
+        cwd: "/diagnostic/process-cwd",
+        state: "ok" as const,
+      },
+    };
+  }
+
+  override async getStatus(sessionId: string): Promise<CodexSessionStatus> {
+    const diagnostic = this.getCwdDiagnostic(sessionId);
+    return { type: "failed", error: diagnostic.error, cwdDiagnostic: diagnostic };
   }
 }
 
@@ -2847,6 +2892,27 @@ async function waitForTest(predicate: () => boolean): Promise<void> {
   assert.fail("condition was not met");
 }
 
+test("Bridge preserves invalid cwd errors and exposes diagnostics without retrying", async () => {
+  const channel = new MockChannelAdapter();
+  const codex = new InvalidCwdCodexAdapter();
+  const logger = new CapturingLogger();
+  const bridge = new Bridge({ channel, codex, logger, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("触发 cwd 错误");
+  await bridge.waitForIdle();
+  await channel.emitText("/status");
+  await bridge.stop();
+
+  const status = channel.sentMessages.find((message) => message.text.startsWith("**Codex 状态**"))?.text ?? "";
+  assert.equal(codex.cwdRuns.length, 1);
+  assert.ok(channel.sentMessages.some((message) => message.text === "Codex 执行失败: invalid cwd: Operation not permitted (os error 1)"));
+  assert.match(status, /最近 cwd 错误: invalid cwd: Operation not permitted/);
+  assert.match(status, /cwd 诊断: `turn\/start`；请求 cwd `\/diagnostic\/session-cwd`（不可访问: Operation not permitted）/);
+  assert.match(status, /app-server 继承 cwd: `\/diagnostic\/process-cwd`（可访问）/);
+  assert.ok(logger.errors.some((entry) => entry.message === "codex invalid cwd diagnostic" && entry.meta?.source === "turn/start"));
+});
+
 test("Bridge permission command shows and changes Codex run policy", async () => {
   const channel = new MockChannelAdapter();
   const codex = new MockCodexAdapter();
@@ -2867,7 +2933,16 @@ test("Bridge permission command shows and changes Codex run policy", async () =>
   await channel.emitText("/permission approval");
   await bridge.stop();
 
-  assert.ok(channel.sentMessages.some((message) => message.text.includes("当前模式: `approval sandbox=workspace-write`")));
+  const permissionText = channel.sentMessages.find((message) => message.text.startsWith("**权限模式**"))?.text ?? "";
+  assert.match(permissionText, /当前: `approval`（手动审批，workspace-write）/);
+  assert.match(permissionText, /范围: 默认策略（后续新会话）/);
+  assert.match(permissionText, /说明: Codex 可在工作区内执行；越界或高风险操作会请求审批。/);
+  assert.match(permissionText, /\/permission approval\n- 手动审批：遇到需要授权的操作，由你用 `\/OK`、`\/P` 或 `\/NO` 决定。/);
+  assert.match(permissionText, /\/permission approve-for-me confirm\n- 自动审阅：Codex 自动处理审批请求，仍限制在工作区沙箱内。/);
+  assert.match(permissionText, /\/permission full confirm\n- 完全权限：跳过审批和沙箱，仅用于完全信任的任务。/);
+  assert.equal(permissionText.includes("Codex 侧审批人"), false);
+  assert.equal(permissionText.includes("Codex 侧沙箱"), false);
+  assert.equal(permissionText.includes("审批支持"), false);
   assert.ok(channel.sentMessages.some((message) => message.text.includes("未知权限模式")));
   assert.ok(channel.sentMessages.some((message) => message.text.includes("Approve for me 会让 Codex 自动审阅审批请求")));
   assert.ok(channel.sentMessages.some((message) => message.text.includes("已切换 Codex 权限模式: approve-for-me")));

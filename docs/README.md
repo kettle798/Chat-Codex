@@ -73,6 +73,9 @@
 - `codex-2026-07-latest-adaptation-design.zh-CN.md`
   Codex 2026-07 最新模型与协议适配设计。基于官方 GPT-5.6 最新模型页和 `references/openai-codex` HEAD `5c19155c`，说明模型动态元数据、开放 reasoning effort、service tier、协议漂移稳定性和后续新功能候选。
 
+- `codex-invalid-cwd-operation-not-permitted.zh-CN.md`
+  Codex `invalid cwd: Operation not permitted (os error 1)` 排障与适配说明。说明 app-server 子进程 cwd、历史 session cwd、macOS 隐私权限、外置盘挂载和新版 environment/runtime workspace roots 对 Chat-Codex 的影响；记录已实现的原始错误诊断，以及后续按证据推进的 cwd 适配边界。
+
 - `codex-permission-modes-alignment-design.zh-CN.md`
   Codex 权限模式对齐设计。说明 Chat-Codex 用户可见权限只收敛为 `approval`、`approve-for-me`、`full` 三个模式，`read-only` 只作为底层诊断信息，不作为聊天命令或默认 TUI 选项。
 

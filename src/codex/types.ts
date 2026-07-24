@@ -1,8 +1,10 @@
 import type { ApprovalDecision, ApprovalRequest } from "../approvals/types.js";
 import type { CodexRunPolicy, CodexRunPolicyStatus } from "./codex-cli.js";
+import type { CodexCwdDiagnostic } from "./cwd-diagnostic.js";
 import type { CodexPromptInput } from "./input.js";
 
 export type { CodexRunPolicy, CodexRunPolicyStatus } from "./codex-cli.js";
+export type { CodexCwdDiagnostic, CodexCwdDiagnosticSource, CodexCwdInspection, CodexCwdInspectionState } from "./cwd-diagnostic.js";
 export type { CodexInputItem, CodexPromptInput, CodexTurnInput } from "./input.js";
 
 export const CODEX_REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
@@ -110,6 +112,7 @@ export type CodexSessionBaseStatus =
 export type CodexSessionStatus = CodexSessionBaseStatus & {
   context?: CodexSessionContextUsage;
   model?: CodexSessionModelInfo;
+  cwdDiagnostic?: CodexCwdDiagnostic;
 };
 
 export type CodexNotificationKind =
@@ -265,6 +268,7 @@ export interface CodexAdapter {
   steer?(sessionId: string, prompt: CodexPromptInput): Promise<void>;
   cancel?(sessionId: string): Promise<void>;
   getStatus(sessionId: string): Promise<CodexSessionStatus>;
+  getCwdDiagnostic?(sessionId?: string): CodexCwdDiagnostic | undefined;
   listSessions(routeKey?: string): Promise<CodexSessionSummary[]>;
   getSessionDetail?(sessionId: string): Promise<CodexSessionDetail | undefined>;
   resolveApproval?(approvalKey: string, decision: ApprovalDecision): Promise<void>;

@@ -12,6 +12,7 @@ export function withContext(record: AppServerSessionRecord, status: CodexSession
     ...status,
     ...(record.status.context ? { context: record.status.context } : {}),
     ...(record.status.model ? { model: record.status.model } : {}),
+    ...(record.status.cwdDiagnostic ? { cwdDiagnostic: record.status.cwdDiagnostic } : {}),
   };
 }
 

@@ -220,6 +220,7 @@ These commands are sent from Weixin or Feishu private chats. Command messages by
 | `/NO` | Deny the latest pending approval |
 | `/permission` | Show current session permission |
 | `/permission approval` | Switch back to approval mode |
+| `/permission approve-for-me confirm` | Switch to auto-review approval mode |
 | `/permission full confirm` | Switch to full permission mode |
 | `/plan` / `/plan <task>` | Enter plan mode, or run a task in plan mode |
 | `/code` / `/code <task>` | Enter code mode, or run a task in code mode |

@@ -3,9 +3,11 @@ import type { CodexRunPolicyStatus } from "../codex/codex-cli.js";
 import type {
   CodexAdapter,
   CodexCollaborationMode,
+  CodexCwdDiagnostic,
   CodexModelOption,
   CodexModelPolicy,
   CodexProgressKind,
+  CodexRunPolicy,
   CodexSessionModelInfo,
   CodexSessionStatus,
 } from "../codex/types.js";
@@ -34,7 +36,6 @@ import {
   formatPendingApprovalStatus,
   formatProgressLabelForStatus,
   formatProgressModeForStatus,
-  formatRunPolicy,
   formatRunPolicyForStatus,
   truncateForChannel,
   formatUnboundSessionForStatus,
@@ -123,6 +124,7 @@ export class BridgeStatusText {
       ? localSession.status
       : adapterStatus;
     const sessionStatus = withLocalStartedAt(statusFromAdapterOrLocal, localSession?.status);
+    const cwdDiagnostic = sessionStatus.cwdDiagnostic ?? this.codex.getCwdDiagnostic?.(binding?.sessionId);
     const approvals = this.approvals.list(routeKey);
     const compactState = this.compactStateForRoute(routeKey);
     const compactRunning = compactState.type === "running";
@@ -145,6 +147,7 @@ export class BridgeStatusText {
       `- 当前模型: ${formatModelInfoForStatus(sessionStatus.model)}`,
       ...formatContextUsageLines(sessionStatus.context),
       binding ? `- 工作目录: \`${localSession?.session.cwd ?? "未知"}\`` : undefined,
+      ...formatCwdDiagnosticLines(cwdDiagnostic),
     ];
     const runtimeLines = [
       `- 处理状态: ${workerRunning ? "正在处理" : "空闲"}`,
@@ -412,18 +415,20 @@ export class BridgeStatusText {
     const policy = policyStatus?.policy ?? this.codex.getRunPolicy?.(sessionId);
     return [
       "**权限模式**",
-      `- 作用范围: ${sessionId ? `当前会话 \`${sessionId}\`` : "默认策略（后续新会话）"}`,
-      `- 当前模式: \`${policy ? formatRunPolicy(policy) : "unknown"}\``,
-      policyStatus ? `- 审批支持: ${formatApprovalSupport(policyStatus)}` : undefined,
-      policyStatus?.effectiveApprovalsReviewer !== undefined ? `- Codex 侧审批人: \`${policyStatus.effectiveApprovalsReviewer ?? "none"}\`` : undefined,
-      policyStatus?.effectiveSandbox ? `- Codex 侧沙箱: \`${policyStatus.effectiveSandbox}\`` : undefined,
-      "- `approval`: 使用 `workspace-write` sandbox；是否能在微信里弹审批取决于 Codex adapter。",
-      "- `approve-for-me`: 使用 `workspace-write` sandbox；审批请求交给 Codex 自动审阅。",
-      "- `full`: 完全权限，跳过审批和沙箱，风险很高。",
-      "- 切回安全沙箱模式: `/permission approval`",
-      "- 切到自动审阅模式: `/permission approve-for-me confirm`",
-      "- 切到完全权限: `/permission full confirm`",
-      policyStatus?.note ? `- 说明: ${policyStatus.note}` : undefined,
+      `- 当前: ${formatPermissionModeCurrent(policy)}`,
+      `- 范围: ${sessionId ? `当前会话 \`${sessionId}\`` : "默认策略（后续新会话）"}`,
+      `- 说明: ${formatPermissionModeDescription(policy)}`,
+      "",
+      "切换:",
+      "",
+      "/permission approval",
+      "- 手动审批：遇到需要授权的操作，由你用 `/OK`、`/P` 或 `/NO` 决定。",
+      "",
+      "/permission approve-for-me confirm",
+      "- 自动审阅：Codex 自动处理审批请求，仍限制在工作区沙箱内。",
+      "",
+      "/permission full confirm",
+      "- 完全权限：跳过审批和沙箱，仅用于完全信任的任务。",
     ].filter(Boolean).join("\n");
   }
 
@@ -453,6 +458,42 @@ function isFeishuGroupMessage(message: ChannelMessage | undefined): boolean {
     || message.channelId.startsWith("feishu-")
     || message.channelId === "lark"
     || message.channelId.startsWith("lark-");
+}
+
+function formatPermissionModeCurrent(policy: CodexRunPolicy | undefined): string {
+  switch (policy?.permissionMode) {
+    case "approval": return "`approval`（手动审批，workspace-write）";
+    case "approve-for-me": return "`approve-for-me`（自动审阅，workspace-write）";
+    case "full": return "`full`（完全权限）";
+    default: return "`unknown`";
+  }
+}
+
+function formatPermissionModeDescription(policy: CodexRunPolicy | undefined): string {
+  switch (policy?.permissionMode) {
+    case "approval": return "Codex 可在工作区内执行；越界或高风险操作会请求审批。";
+    case "approve-for-me": return "Codex 自动审阅审批请求，仍限制在工作区沙箱内。";
+    case "full": return "跳过审批和沙箱，仅用于完全信任的任务。";
+    default: return "当前 Codex Adapter 未返回权限策略。";
+  }
+}
+
+function formatCwdDiagnosticLines(diagnostic: CodexCwdDiagnostic | undefined): string[] {
+  if (!diagnostic) return [];
+  return [
+    `- 最近 cwd 错误: ${diagnostic.error}`,
+    `- cwd 诊断: \`${diagnostic.source}\`；请求 cwd ${formatCwdInspection(diagnostic.requestCwd)}`,
+    `- app-server 继承 cwd: ${formatCwdInspection(diagnostic.inheritedProcessCwd)}`,
+  ];
+}
+
+function formatCwdInspection(inspection: CodexCwdDiagnostic["requestCwd"]): string {
+  const cwd = inspection.cwd ? `\`${inspection.cwd}\`` : "未提供";
+  if (inspection.state === "ok") return `${cwd}（可访问）`;
+  if (inspection.state === "missing") return `${cwd}（不存在）`;
+  if (inspection.state === "not_directory") return `${cwd}（不是目录）`;
+  if (inspection.state === "not_provided") return "未提供";
+  return `${cwd}（不可访问${inspection.error ? `: ${truncateForChannel(inspection.error, 120)}` : ""}）`;
 }
 
 interface HelpCommand {

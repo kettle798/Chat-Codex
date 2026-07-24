@@ -82,23 +82,75 @@ Chat-Codex 本轮只使用 `user` 和 `auto_review`，不暴露 `guardian_subage
 
 ### `/permission`
 
-查看当前权限状态：
+查看当前权限状态和切换命令。没有绑定 session 时，范围显示为默认策略，影响后续新会话；完整的聊天侧输出见下一节。
+
+### `/permission` 输出精简要求
+
+当前实现的 `/permission` 输出过长，会把用户已经知道或不需要每次看到的底层细节全部刷出来，例如：
 
 ```text
 **权限模式**
 - 作用范围: 当前会话 `...`
-- 当前模式: `approval`
-- Codex 侧审批策略: on-request
-- Codex 侧审批人: user
-- Codex 侧沙箱: workspace-write
-
-可用命令:
-- /permission approval
-- /permission approve-for-me confirm
-- /permission full confirm
+- 当前模式: `approval sandbox=workspace-write`
+- 审批支持: 支持微信内审批（实际策略 on-request，审批人 user）
+- Codex 侧审批人: `user`
+- Codex 侧沙箱: `workspace-write`
+- `approval`: 使用 `workspace-write` sandbox；是否能在微信里弹审批取决于 Codex adapter。
+- `approve-for-me`: 使用 `workspace-write` sandbox；审批请求交给 Codex 自动审阅。
+- `full`: 完全权限，跳过审批和沙箱，风险很高。
+- 切回安全沙箱模式: `/permission approval`
+- 切到自动审阅模式: `/permission approve-for-me confirm`
+- 切到完全权限: `/permission full confirm`
+- 说明: codex app-server 会把审批请求回调给中间件，可通过微信 /OK、/P 或 /NO 处理。
 ```
 
-如果没有绑定 session，则作用范围仍沿用当前语义：默认策略，影响后续新会话。
+这个输出不适合聊天渠道，尤其是微信。`/permission` 应优先回答“现在是什么、怎么切换”，不应每次展开 app-server reviewer、sandbox、adapter 支持说明和审批命令说明。
+
+建议收敛为：
+
+```text
+**权限模式**
+- 当前: `approval`（手动审批，workspace-write）
+- 范围: 当前会话 `...`
+- 说明: Codex 可在工作区内执行；越界或高风险操作会请求审批。
+
+切换:
+
+/permission approval
+- 手动审批：遇到需要授权的操作，由你用 `/OK`、`/P` 或 `/NO` 决定。
+
+/permission approve-for-me confirm
+- 自动审阅：Codex 自动处理审批请求，仍限制在工作区沙箱内。
+
+/permission full confirm
+- 完全权限：跳过审批和沙箱，仅用于完全信任的任务。
+```
+
+不同模式的一行说明：
+
+```text
+approval: 手动审批，workspace-write。越界或高风险操作会请求审批。
+approve-for-me: 自动审阅，workspace-write。Codex 自动审阅审批请求，不等于完全权限。
+full: 完全权限。跳过审批和沙箱，只在信任任务时使用。
+```
+
+展示规则：
+
+- 默认显示当前模式、作用范围、当前模式的一行说明，以及切换命令。
+- 每条切换命令下方保留一句作用说明，帮助用户在聊天渠道直接判断该命令的风险与效果。
+- 只保留当前模式的一行说明，不展示 `approval` / `approve-for-me` / `full` 的长解释。
+- 不展示 “Codex 侧审批人”、“Codex 侧沙箱”、“审批支持” 等底层字段。
+- 不展示 “可通过微信 /OK、/P 或 /NO 处理” 这类审批说明；审批请求消息自身已经包含这些操作。
+- 只有在状态异常、adapter 不支持某模式、Codex 返回和 Chat-Codex run policy 不一致时，才追加一行诊断说明。
+- 详细说明应放在 README、`/help` 或 TUI 说明页，不放在每次 `/permission` 响应里。
+
+### 实施状态（2026-07-24）
+
+已在 `src/bridge/status-text.ts` 实现上述精简输出，并由 Bridge mock 集成测试覆盖：
+
+- 当前模式、作用范围和一行说明保留。
+- 三条切换命令均保留一行作用说明。
+- 不再展示 Codex 侧审批人、sandbox、adapter 审批支持和重复的审批操作说明。
 
 ### `/permission approval`
 

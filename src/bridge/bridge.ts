@@ -205,6 +205,7 @@ export class Bridge {
       codex: this.codex,
       state: this.state,
       approvals: this.approvals,
+      logger: this.logger,
       turnScheduler: this.turnScheduler,
       transcript: this.transcript,
       delivery: this.delivery,

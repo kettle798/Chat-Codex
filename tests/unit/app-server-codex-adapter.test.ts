@@ -17,6 +17,7 @@ function fakeCodexBin(root: string): string {
 const fs = require("node:fs");
 const readline = require("node:readline");
 fs.appendFileSync(${JSON.stringify(path.join(root, "fake-app-server-starts.log"))}, process.pid + "\\n");
+const requestLog = ${JSON.stringify(path.join(root, "fake-app-server-requests.log"))};
 const rl = readline.createInterface({ input: process.stdin });
 let threadId = "thread-app-server-1";
 let turnId = "turn-app-server-1";
@@ -242,9 +243,14 @@ rl.on("line", (line) => {
     return;
   }
   if (message.method === "turn/start") {
+    fs.appendFileSync(requestLog, "turn/start\\n");
+    const prompt = message.params.input?.[0]?.text || "";
+    if (prompt.includes("invalid cwd")) {
+      send({ id: message.id, error: { code: -32602, message: "invalid cwd: Operation not permitted (os error 1)" } });
+      return;
+    }
     turnId = "turn-app-server-" + Date.now();
     send({ id: message.id, result: { turn: { id: turnId, items: [], itemsView: "complete", status: "inProgress", error: null, startedAt: 1778716800, completedAt: null, durationMs: null } } });
-    const prompt = message.params.input?.[0]?.text || "";
     if (prompt.includes("transient reconnect final")) {
       send({ method: "error", params: { threadId, turnId, error: { message: "Reconnecting... 5/5" } } });
       send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg-1", text: "reconnect final done", phase: null, memoryCitation: null } } });
@@ -450,6 +456,12 @@ function fakeAppServerStartCount(root: string): number {
   const filePath = path.join(root, "fake-app-server-starts.log");
   if (!fs.existsSync(filePath)) return 0;
   return fs.readFileSync(filePath, "utf8").trim().split(/\r?\n/).filter(Boolean).length;
+}
+
+function fakeRequestCount(root: string, method: string): number {
+  const filePath = path.join(root, "fake-app-server-requests.log");
+  if (!fs.existsSync(filePath)) return 0;
+  return fs.readFileSync(filePath, "utf8").split(/\r?\n/).filter((line) => line === method).length;
 }
 
 test("AppServerCodexAdapter routes command approvals through resolveApproval", async () => {
@@ -1286,6 +1298,36 @@ test("AppServerCodexAdapter emits goal auto-continuation as background events", 
   assert.ok(events.some((event) => event.type === "assistant.progress" && event.text.includes("正在推进 Goal")));
   assert.ok(events.some((event) => event.type === "assistant.completed" && event.text === "Goal 自动续跑完成"));
   assert.ok(events.some((event) => event.type === "turn.completed"));
+});
+
+test("AppServerCodexAdapter records invalid cwd diagnostics without retrying the turn", async () => {
+  const root = tempDir();
+  const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
+  const session = await adapter.startSession({
+    routeKey: "route-1",
+    cwd: root,
+    title: "cwd diagnostic",
+  });
+
+  try {
+    await assert.rejects(async () => {
+      for await (const _event of adapter.run(session.id, "trigger invalid cwd")) {
+        // The fake server rejects before a turn starts.
+      }
+    }, /invalid cwd: Operation not permitted/);
+
+    const status = await adapter.getStatus(session.id);
+    const diagnostic = adapter.getCwdDiagnostic(session.id);
+    assert.equal(status.type, "failed");
+    assert.equal(status.cwdDiagnostic?.source, "turn/start");
+    assert.equal(status.cwdDiagnostic?.error, "invalid cwd: Operation not permitted (os error 1)");
+    assert.equal(diagnostic?.requestCwd.cwd, root);
+    assert.equal(diagnostic?.requestCwd.state, "ok");
+    assert.equal(diagnostic?.inheritedProcessCwd.state, "ok");
+    assert.equal(fakeRequestCount(root, "turn/start"), 1);
+  } finally {
+    await adapter.stop();
+  }
 });
 
 async function waitForUnit(predicate: () => boolean, timeoutMs = 1000): Promise<void> {

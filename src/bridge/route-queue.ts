@@ -1,7 +1,9 @@
 import type { ApprovalManager } from "../approvals/approval-manager.js";
 import { randomUUID } from "node:crypto";
+import { isInvalidCwdError } from "../codex/cwd-diagnostic.js";
 import type { CodexAdapter, CodexCollaborationMode, CodexProgressKind, CodexPromptInput, CodexSessionStatus } from "../codex/types.js";
 import { codexInputPlainText, codexInputText, withCodexInputText } from "../codex/input.js";
+import { SilentLogger, type Logger } from "../logging/logger.js";
 import type { TranscriptSink } from "../logging/transcript.js";
 import type { ChannelMessage, ChannelTarget } from "../protocol/channel.js";
 import type { ChannelDeliveryPolicy } from "../protocol/delivery-policy.js";
@@ -28,6 +30,7 @@ export interface BridgeRouteQueueOptions {
   codex: CodexAdapter;
   state: MemoryStateStore;
   approvals: ApprovalManager;
+  logger?: Logger;
   turnScheduler: TurnScheduler;
   transcript?: TranscriptSink;
   delivery: BridgeDelivery;
@@ -54,6 +57,7 @@ export class BridgeRouteQueue {
   private readonly codex: CodexAdapter;
   private readonly state: MemoryStateStore;
   private readonly approvals: ApprovalManager;
+  private readonly logger: Logger;
   private readonly turnScheduler: TurnScheduler;
   private readonly transcript?: TranscriptSink;
   private readonly delivery: BridgeDelivery;
@@ -75,6 +79,7 @@ export class BridgeRouteQueue {
     this.codex = options.codex;
     this.state = options.state;
     this.approvals = options.approvals;
+    this.logger = options.logger ?? new SilentLogger();
     this.turnScheduler = options.turnScheduler;
     this.transcript = options.transcript;
     this.delivery = options.delivery;
@@ -194,6 +199,7 @@ export class BridgeRouteQueue {
           await this.delivery.sendText(task.target, this.staleBindingClearedText(task.message, error));
           continue;
         }
+        this.logCwdDiagnostic(error);
         await this.delivery.sendText(task.target, `Codex 执行失败: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
@@ -401,6 +407,23 @@ export class BridgeRouteQueue {
       "",
       this.sessionFlow.unboundRoutePromptText(message),
     ].join("\n");
+  }
+
+  private logCwdDiagnostic(error: unknown): void {
+    if (!isInvalidCwdError(error)) return;
+    const diagnostic = this.codex.getCwdDiagnostic?.();
+    if (!diagnostic) return;
+    this.logger.error("codex invalid cwd diagnostic", {
+      source: diagnostic.source,
+      sessionId: diagnostic.sessionId,
+      requestCwd: diagnostic.requestCwd.cwd,
+      requestCwdState: diagnostic.requestCwd.state,
+      requestCwdRealpath: diagnostic.requestCwd.realpath,
+      inheritedProcessCwd: diagnostic.inheritedProcessCwd.cwd,
+      inheritedProcessCwdState: diagnostic.inheritedProcessCwd.state,
+      inheritedProcessCwdRealpath: diagnostic.inheritedProcessCwd.realpath,
+      error: diagnostic.error,
+    });
   }
 }
 

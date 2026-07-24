@@ -25,6 +25,13 @@ import type {
 import { displayCodexSessionTitle, findCodexSessionById, type CodexRunPolicy } from "./codex-cli.js";
 import { ensureCodexStatePreviewIfEmpty } from "./codex-state-preview.js";
 import { resolveCodexCommand, type CodexCommandResolution } from "./codex-process.js";
+import {
+  inspectCodexCwd,
+  inspectCurrentProcessCwd,
+  isInvalidCwdError,
+  type CodexCwdDiagnostic,
+  type CodexCwdDiagnosticSource,
+} from "./cwd-diagnostic.js";
 import { codexInputText } from "./input.js";
 import { approvalFromServerRequest, responseForApprovalDecision } from "./app-server/approval-handler.js";
 import { goalFromResponse, goalFromSetResponse } from "./app-server/goal-api.js";
@@ -89,6 +96,8 @@ export class AppServerCodexAdapter implements CodexAdapter {
   private readonly pendingApprovals = new Map<string, PendingServerApproval>();
   private readonly pendingUserInputs = new Map<string, PendingServerUserInput>();
   private readonly compactWaiters = new Map<string, CompactWaiter>();
+  private readonly cwdDiagnostics = new Map<string, CodexCwdDiagnostic>();
+  private lastCwdDiagnostic?: CodexCwdDiagnostic;
   private readonly turns = new AppServerTurnController({
     sessions: this.sessionStore.records,
     threadToSession: this.sessionStore.threadToSession,
@@ -354,6 +363,10 @@ export class AppServerCodexAdapter implements CodexAdapter {
     return this.sessionStore.getStatus(sessionId);
   }
 
+  getCwdDiagnostic(sessionId?: string): CodexCwdDiagnostic | undefined {
+    return sessionId ? this.cwdDiagnostics.get(sessionId) : this.lastCwdDiagnostic;
+  }
+
   async listSessions(routeKey?: string): Promise<CodexSessionSummary[]> {
     if (routeKey) return this.sessionStore.listSessions(routeKey, this.codexHome);
     const runtimeSessions = this.sessionStore.listRuntimeSessions();
@@ -578,7 +591,35 @@ export class AppServerCodexAdapter implements CodexAdapter {
     params?: unknown,
     options: { timeoutMs?: number; onResult?: (value: unknown) => void } = {},
   ): Promise<T> {
-    return this.rpc.request(method, params, options);
+    try {
+      return await this.rpc.request(method, params, options);
+    } catch (error) {
+      this.recordCwdDiagnostic(method, params, error);
+      throw error;
+    }
+  }
+
+  private recordCwdDiagnostic(method: string, params: unknown, error: unknown): void {
+    const source = cwdDiagnosticSource(method);
+    if (!source || !isInvalidCwdError(error)) return;
+    const request = objectValue(params);
+    const sessionId = stringValue(request.threadId) ?? stringValue(request.thread_id);
+    const diagnostic: CodexCwdDiagnostic = {
+      source,
+      error: error instanceof Error ? error.message : String(error),
+      observedAt: new Date().toISOString(),
+      ...(sessionId ? { sessionId } : {}),
+      requestCwd: inspectCodexCwd(stringValue(request.cwd)),
+      inheritedProcessCwd: inspectCurrentProcessCwd(),
+    };
+    this.lastCwdDiagnostic = diagnostic;
+    if (sessionId) this.cwdDiagnostics.set(sessionId, diagnostic);
+
+    const stored = sessionId ? this.sessionStore.get(sessionId) : undefined;
+    if (stored) {
+      stored.status = { ...withContext(stored, { type: "failed", error: diagnostic.error }), cwdDiagnostic: diagnostic };
+      stored.updatedAt = diagnostic.observedAt;
+    }
   }
 
   private handleNotification(notification: JsonRpcNotification): void {
@@ -1111,4 +1152,9 @@ function isoFromMilliseconds(milliseconds: number | undefined): string | undefin
 
 function runningStartedAt(status: CodexSessionStatus): string | undefined {
   return "startedAt" in status ? status.startedAt : undefined;
+}
+
+function cwdDiagnosticSource(method: string): CodexCwdDiagnosticSource | undefined {
+  if (method === "thread/start" || method === "thread/resume" || method === "turn/start") return method;
+  return undefined;
 }
