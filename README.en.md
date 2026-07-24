@@ -54,6 +54,7 @@ The core goal is to make Codex usable from chat windows while keeping routes, se
 - One Codex session can only belong to one route, preventing context, approval, and file delivery mix-ups.
 - Codex app-server as the default Codex integration, with `codex exec --json` as a fallback adapter.
 - Chat-side commands for creating/resuming sessions, inspecting status, stopping turns, handling approvals, switching permissions, switching models, and sending files.
+- Feishu private approvals use cards for one-time approval, session approval, and denial, while text commands remain the fallback.
 - Local persistence for channel instances, chat bindings, session owners, session policies, and pending bindings.
 - Runtime TUI log panel for inbound messages, outbound replies, progress, media, and errors.
 
@@ -202,6 +203,8 @@ Normal messages for the same route are serialized. Different routes can run diff
 ## Chat Commands
 
 These commands are sent from Weixin or Feishu private chats. Command messages bypass the normal prompt queue and are handled immediately.
+
+When Codex requests approval in a Feishu private chat, Chat-Codex shows one-time approval, session approval, and deny buttons. The buttons and `/OK`, `/P`, `/NO` use the same approval state machine; text commands remain available if cards or callbacks are unavailable.
 
 | Command | Purpose |
 | --- | --- |

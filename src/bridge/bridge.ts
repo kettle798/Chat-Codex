@@ -9,7 +9,13 @@ import { SilentLogger } from "../logging/logger.js";
 import type { TranscriptSink } from "../logging/transcript.js";
 import { ChannelRegistry, createSingleChannelRegistry } from "../channels/registry.js";
 import { FeishuGroupMemberRegistry } from "../channels/feishu/group/group-member-registry.js";
-import type { ChannelAdapter, ChannelMessage, ChannelTarget } from "../protocol/channel.js";
+import type {
+  ChannelAdapter,
+  ChannelApprovalAction,
+  ChannelApprovalActionResult,
+  ChannelMessage,
+  ChannelTarget,
+} from "../protocol/channel.js";
 import { replyTargetFromMessage } from "../protocol/channel.js";
 import type { ChannelDeliveryPolicy } from "../protocol/delivery-policy.js";
 import { DEFAULT_CHANNEL_DELIVERY_POLICY, normalizeChannelDeliveryPolicy } from "../protocol/delivery-policy.js";
@@ -42,6 +48,7 @@ import { BridgeRouteSteering } from "./route-steering.js";
 import { RouteTrustGate } from "./route-trust-gate.js";
 import { BridgeSessionFlow } from "./session-flow.js";
 import { BridgeStatusText } from "./status-text.js";
+import { handleChannelApprovalAction } from "./approval-actions.js";
 import { handleApprovalCommand } from "./commands/approval-command.js";
 import { handleCancelCommand } from "./commands/cancel-command.js";
 import { handleCollaborationModeCommand } from "./commands/collaboration-command.js";
@@ -236,6 +243,10 @@ export class Bridge {
       shouldDeliverCommentaryWithPolicy: (policy, routeKey) => this.shouldDeliverCommentaryWithPolicy(policy, routeKey),
       isRealtimeCommentaryWithPolicy: (policy, routeKey) => this.isRealtimeCommentaryWithPolicy(policy, routeKey),
       shouldDeliverToolProgressWithPolicy: (policy, routeKey) => this.shouldDeliverToolProgressWithPolicy(policy, routeKey),
+      shouldDeliverContextCompaction: (routeKey, sessionId) => {
+        const compactState = this.compactStateForRoute(routeKey);
+        return compactState.type !== "running" || compactState.sessionId !== sessionId;
+      },
       progressDelivery: this.progressDelivery,
       commentaryDelivery: this.commentaryDelivery,
       notificationDelivery: this.notificationDelivery,
@@ -381,6 +392,7 @@ export class Bridge {
   async start(): Promise<void> {
     this.stopBackgroundEvents = this.codex.onBackgroundEvent?.((event) => this.backgroundTurns.handle(event));
     this.channels.onMessage((message) => this.handleMessage(message));
+    this.channels.onApprovalAction((action) => this.handleChannelApprovalAction(action));
     await this.channels.start();
     this.logger.info("bridge started", { channels: this.channels.ids().join(",") });
   }
@@ -545,6 +557,20 @@ export class Bridge {
       codex: this.codex,
       delivery: this.delivery,
     }, message, target, args, decision);
+  }
+
+  private async handleChannelApprovalAction(action: ChannelApprovalAction): Promise<ChannelApprovalActionResult> {
+    this.logger.info("channel approval action received", {
+      channel: action.message.channelId,
+      routeKey: action.message.routeKey,
+      approvalKey: action.approvalKey,
+      decision: action.decision,
+      sender: action.message.sender.id,
+    });
+    return handleChannelApprovalAction({
+      approvals: this.approvals,
+      codex: this.codex,
+    }, action);
   }
 
   async waitForIdle(): Promise<void> {

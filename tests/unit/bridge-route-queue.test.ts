@@ -57,6 +57,20 @@ test("BridgeRouteQueue delivers Codex notifications even when progress is suppre
   assert.equal(fixture.sentTexts.some((text) => text.includes("普通进度不应发送")), false);
 });
 
+test("BridgeRouteQueue delivers context compaction notices even when progress is suppressed", async () => {
+  const fixture = routeQueueFixture({
+    codex: new ContextCompactionCodexAdapter(),
+    shouldDeliverProgress: false,
+  });
+
+  await fixture.queue.enqueuePrompt(message("route-a", "压缩上下文"), target("route-a"), "压缩上下文");
+  await fixture.queue.waitForWorkers();
+
+  assert.ok(fixture.sentTexts.includes("Codex 正在压缩当前会话的上下文。"));
+  assert.ok(fixture.sentTexts.includes("Codex 已完成当前会话的上下文压缩。"));
+  assert.equal(fixture.sentTexts.some((text) => text.includes("普通进度不应发送")), false);
+});
+
 test("BridgeRouteQueue delivers connection notifications even when normal progress is silent", async () => {
   const fixture = routeQueueFixture({
     codex: new NotificationCodexAdapter({
@@ -135,6 +149,22 @@ test("BridgeRouteQueue reloads externally updated context before running prompt"
   assert.deepEqual(fixture.codex.reloadedSessions, [session.id]);
   assert.equal(fixture.codex.runs[0]?.prompt, "继续");
   assert.ok(fixture.sentTexts.some((text) => text.includes("已在发送前重新加载")));
+});
+
+test("BridgeRouteQueue sends the recovered last assistant reply before forwarding the next prompt", async () => {
+  const codex = new ReloadReplyCodexAdapter();
+  const fixture = routeQueueFixture({ codex, contextRefreshMode: "reload" });
+  const session = await codex.startSession({ routeKey: "route-a", cwd: "/repo" });
+  fixture.state.bindSession("route-a", session);
+  fixture.state.setSessionContextSnapshot({ sessionId: session.id, observedBy: "bind", fingerprint: fp(session.id, 10, 100) });
+  fixture.setFingerprint(fp(session.id, 20, 120));
+
+  await fixture.queue.enqueuePrompt(message("route-a", "继续"), target("route-a"), "继续");
+  await fixture.queue.waitForWorkers();
+
+  const refreshMessage = fixture.sentTexts.find((text) => text.includes("当前 session 最后一条回复："));
+  assert.ok(refreshMessage?.includes("终端最新回复"));
+  assert.ok((fixture.sentTexts.indexOf(refreshMessage ?? "") < fixture.sentTexts.findIndex((text) => text.includes("Codex 正在处理这条消息。"))));
 });
 
 test("BridgeRouteQueue keeps persisted snapshot for refresh check when auto-resuming", async () => {
@@ -315,6 +345,25 @@ class NotificationCodexAdapter extends MockCodexAdapter {
     };
     yield { type: "assistant.completed", sessionId, turnId, text: "done" };
     yield { type: "turn.completed", sessionId, turnId };
+  }
+}
+
+class ContextCompactionCodexAdapter extends MockCodexAdapter {
+  override async *run(sessionId: string, _prompt: CodexPromptInput): AsyncIterable<CodexEvent> {
+    const turnId = "context-compaction-turn";
+    yield { type: "turn.started", sessionId, turnId };
+    yield { type: "assistant.progress", sessionId, turnId, text: "普通进度不应发送", kind: "other" };
+    yield { type: "context.compaction", sessionId, turnId, phase: "started" };
+    yield { type: "context.compaction", sessionId, turnId, phase: "completed" };
+    yield { type: "assistant.completed", sessionId, turnId, text: "done" };
+    yield { type: "turn.completed", sessionId, turnId };
+  }
+}
+
+class ReloadReplyCodexAdapter extends MockCodexAdapter {
+  override async reloadSession(sessionId: string) {
+    const result = await super.reloadSession(sessionId);
+    return { ...result, lastAssistantMessage: "终端最新回复" };
   }
 }
 

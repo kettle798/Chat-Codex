@@ -70,6 +70,42 @@ test("BridgeDelivery logs target details when channel text delivery fails", asyn
   });
 });
 
+test("BridgeDelivery falls back to text when an approval card cannot be sent", async () => {
+  const approvals = new ApprovalManager();
+  const pending = approvals.create("route", "user", {
+    kind: "command",
+    sessionId: "session-1",
+    turnId: "turn-1",
+    itemId: "item-1",
+    command: "npm test",
+    availableDecisions: ["approve", "approve-session", "deny"],
+  });
+  const sentTexts: string[] = [];
+  let cardAttempts = 0;
+  const delivery = new BridgeDelivery({
+    channels: {
+      get: () => ({ sendApprovalRequest: async () => undefined }),
+      sendApprovalRequest: async () => {
+        cardAttempts += 1;
+        throw new Error("interactive messages unavailable");
+      },
+      sendText: async (_target: ChannelTarget, text: string) => {
+        sentTexts.push(text);
+        return { channelId: "mock", messageId: "text-1", deliveredAt: new Date().toISOString() };
+      },
+    } as unknown as ChannelRegistry,
+    approvals,
+    logger: new SilentLogger(),
+    approvalSendRetryDelayMs: 1,
+  });
+
+  await delivery.sendApprovalUntilDelivered("route", target(), pending);
+
+  assert.equal(cardAttempts, 1);
+  assert.equal(sentTexts.length, 1);
+  assert.match(sentTexts[0] ?? "", /Codex 请求审批/);
+});
+
 test("BridgeDelivery suppresses progress briefly after a progress send failure", async () => {
   const fixture = deliveryFixture({ failText: true });
   await fixture.delivery.sendProgressText("route", target(), "progress 1");

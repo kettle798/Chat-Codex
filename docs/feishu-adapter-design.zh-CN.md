@@ -10,12 +10,13 @@
 - 通过飞书长连接 WebSocket 接收事件。
 - 支持私聊文本、图片和文件消息。
 - 复用现有 Bridge 的 route/session 绑定、`/new`、`/resume`、`/use`、`/status`、审批和队列能力。
+- 支持飞书私聊审批卡片；按钮继续复用统一 ApprovalManager 和 Codex adapter。
 - 飞书默认投递普通文本进度信息，和微信默认抑制进度不同。
 
 不在第一阶段做：
 
 - 群聊、话题/thread、文档评论事件、会议邀请事件。
-- 交互式卡片、卡片更新、流式卡片。
+- 通用消息更新、进度卡片、流式卡片和 CardKit。
 - 飞书文档/多维表格/日历/任务工具。
 - 用户身份 OAuth 或以用户身份发消息。
 - webhook 入站模式。
@@ -185,7 +186,7 @@ getCapabilities() {
 - 飞书官方能力支持群聊、thread、媒体、反应和卡片，但 adapter 只声明实际已实现能力。
 - `media=true` 表示已实现出站图片/文件发送；`receiveMedia=true` 表示已实现入站图片/文件接收、下载和本地保存。
 - `typing` 用官方插件同款 reaction 方案实现：处理期间给入站消息添加 `Typing` 表情，完成后移除。
-- `messageUpdate` 第一阶段不做；进度先以普通文本投递。
+- `messageUpdate` 保持 `false`；审批卡片使用动作回调返回的即时结果，不声明通用消息更新能力。
 - `streamingHint` 可以为 true，表示该渠道适合接收进度/阶段性输出；实际是否发送由 `ChannelDeliveryPolicy` 和 `/progress` 控制。
 
 ### 投递策略
@@ -231,7 +232,7 @@ Bridge 当前默认进度模式是 `brief`，投递 Codex 旁白、reasoning、t
 2. 创建 `Lark.Client`。
 3. probe 机器人身份，保存 `botOpenId` 和 `botName`。
 4. 创建 `EventDispatcher`，传入 `encryptKey` 和 `verificationToken`。
-5. 注册 `im.message.receive_v1`。
+5. 注册 `im.message.receive_v1` 和私聊审批卡片的 `card.action.trigger`。
 6. 创建 `WSClient`。
 7. 调用 `wsClient.start({ eventDispatcher })`。
 8. `stop()` 时关闭 WSClient 并清理状态。
@@ -594,7 +595,8 @@ Codex Chat Bridge
 
 ### 入站要求
 
-- 只处理 `im.message.receive_v1`。
+- 普通消息只处理 `im.message.receive_v1`。
+- 审批卡片只处理 `card.action.trigger`，且必须来自本进程发送的私聊审批卡片。
 - 只处理 `chat_type === "p2p"`。
 - 必须过滤 bot/self echo。
 - 必须按 `message_id` 做内存去重。
@@ -606,6 +608,7 @@ Codex Chat Bridge
 - `sendText()` 优先用 `im.message.reply` 回复 `sourceMessageId`。
 - reply 失败时 fallback 到 `im.message.create`，目标使用 `chat_id`。
 - 飞书发送失败要更新 `lastError`，但不能让 Bridge 崩溃。
+- 待审批时优先发送 interactive 卡片；卡片发送失败立即回退原有 `/OK`、`/P`、`/NO` 文本提示。
 - 第一阶段进度以普通文本消息投递，不做卡片聚合。
 
 ### Bridge 能力验收
@@ -625,6 +628,9 @@ Codex Chat Bridge
 /model
 /plan
 /code
+/OK
+/P
+/NO
 ```
 
 其中：
@@ -634,6 +640,7 @@ Codex Chat Bridge
 - `/progress silent` 后不再投递进度。
 - `/resume` 和 `/use` 不带参数时进入编号选择模式。
 - session 归属规则和微信一致，一个 Codex session 只能绑定一个 route。
+- 飞书私聊审批卡片的具体安全校验、回退和真实应用事件订阅见 `feishu-direct-approval-card-design.zh-CN.md`。
 
 ### 测试门槛
 

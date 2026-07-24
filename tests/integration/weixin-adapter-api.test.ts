@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { FileWeixinAccountStore } from "../../src/channels/weixin/weixin-account-store.js";
 import { WeixinAdapter } from "../../src/channels/weixin/weixin-adapter.js";
-import type { FetchLike } from "../../src/channels/weixin/weixin-api.js";
+import { WeixinApiClient, type FetchLike } from "../../src/channels/weixin/weixin-api.js";
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -119,6 +119,42 @@ test("WeixinAdapter waitLogin returns timeout when QR status polling reaches dea
   assert.equal((await adapter.getStatus()).lastError, "login timeout");
 });
 
+test("WeixinApiClient treats its getupdates timeout as an empty poll but preserves external abort", async () => {
+  const signals: AbortSignal[] = [];
+  const fetchImpl: FetchLike = async (_input, init) => {
+    const signal = init?.signal;
+    if (!signal) throw new Error("getupdates request missing abort signal");
+    signals.push(signal);
+    return new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener("abort", () => {
+        const error = new Error("aborted");
+        error.name = "AbortError";
+        reject(error);
+      }, { once: true });
+    });
+  };
+  const api = new WeixinApiClient({ baseUrl: "https://api.example", fetch: fetchImpl });
+
+  const timedOut = await api.getUpdates({
+    token: "token-1",
+    getUpdatesBuf: "cursor-1",
+    timeoutMs: 5,
+  });
+  assert.deepEqual(timedOut, { ret: 0, msgs: [], get_updates_buf: "cursor-1" });
+
+  const controller = new AbortController();
+  const pending = api.getUpdates({
+    token: "token-1",
+    timeoutMs: 10_000,
+    signal: controller.signal,
+  });
+  await waitFor(async () => signals.length === 2);
+  controller.abort();
+
+  await assert.rejects(pending, (error: unknown) => error instanceof Error && error.name === "AbortError");
+  assert.equal(signals[1]?.aborted, true);
+});
+
 test("WeixinAdapter sends text messages with context token and run id", async () => {
   const store = new FileWeixinAccountStore(tempStateDir());
   store.saveAccount({
@@ -161,6 +197,8 @@ test("WeixinAdapter sends text messages with context token and run id", async ()
   assert.ok(call.signal, "sendmessage should have an abort signal");
   assert.equal(call.headers.get("Authorization"), "Bearer token-1");
   const body = JSON.parse(call.body ?? "{}");
+  assert.equal(body.base_info.channel_version, "2.4.6");
+  assert.equal(call.headers.get("iLink-App-ClientVersion"), "132102");
   assert.equal(body.msg.to_user_id, "user@im.wechat");
   assert.equal(body.msg.context_token, "ctx-1");
   assert.equal(body.msg.run_id, "run-1");
@@ -858,6 +896,104 @@ test("WeixinAdapter marks channel login_required when getupdates reports expired
   assert.equal(status.state, "login_required");
   assert.equal(status.account, "abc-im-bot");
   assert.match(status.lastError ?? "", /session expired/);
+});
+
+test("WeixinAdapter stop aborts a pending long-poll without waiting for its timeout", async () => {
+  const store = new FileWeixinAccountStore(tempStateDir());
+  store.saveAccount({
+    accountId: "abc-im-bot",
+    token: "token-1",
+    baseUrl: "https://api.example",
+    savedAt: new Date().toISOString(),
+  });
+  let pollSignal: AbortSignal | undefined;
+  const fetchImpl: FetchLike = async (input, init) => {
+    const url = String(input);
+    if (url.includes("notifystart") || url.includes("notifystop")) return jsonResponse({});
+    if (url.includes("getupdates")) {
+      pollSignal = init?.signal ?? undefined;
+      return new Promise<Response>((_resolve, reject) => {
+        pollSignal?.addEventListener("abort", () => {
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          reject(error);
+        }, { once: true });
+      });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const adapter = new WeixinAdapter({
+    baseUrl: "https://api.example",
+    store,
+    longPollTimeoutMs: 10_000,
+    apiOptions: { fetch: fetchImpl },
+  });
+
+  await adapter.start();
+  let stopped = false;
+  try {
+    await waitFor(async () => Boolean(pollSignal));
+    await Promise.race([
+      adapter.stop().then(() => {
+        stopped = true;
+      }),
+      sleep(300).then(() => {
+        throw new Error("adapter.stop() did not abort the pending long-poll promptly");
+      }),
+    ]);
+  } finally {
+    if (!stopped) await adapter.stop();
+  }
+
+  assert.equal(pollSignal?.aborted, true);
+  assert.equal((await adapter.getStatus()).state, "stopped");
+});
+
+test("WeixinAdapter uses the server-suggested timeout for the next long-poll", async () => {
+  const store = new FileWeixinAccountStore(tempStateDir());
+  store.saveAccount({
+    accountId: "abc-im-bot",
+    token: "token-1",
+    baseUrl: "https://api.example",
+    savedAt: new Date().toISOString(),
+  });
+  let getUpdatesCalls = 0;
+  let serverSuggestedTimeoutObserved = false;
+  const fetchImpl: FetchLike = async (input, init) => {
+    const url = String(input);
+    if (url.includes("notifystart") || url.includes("notifystop")) return jsonResponse({});
+    if (url.includes("getupdates")) {
+      getUpdatesCalls += 1;
+      if (getUpdatesCalls === 1) {
+        return jsonResponse({ ret: 0, longpolling_timeout_ms: 20 });
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          if (!init.signal?.aborted) return;
+          serverSuggestedTimeoutObserved = true;
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          reject(error);
+        }, { once: true });
+      });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const adapter = new WeixinAdapter({
+    baseUrl: "https://api.example",
+    store,
+    longPollTimeoutMs: 2_000,
+    apiOptions: { fetch: fetchImpl },
+  });
+
+  await adapter.start();
+  try {
+    await waitFor(async () => serverSuggestedTimeoutObserved, 500);
+  } finally {
+    await adapter.stop();
+  }
+
+  assert.ok(getUpdatesCalls >= 2);
 });
 
 test("WeixinAdapter can report connected from stored account without starting polling", async () => {

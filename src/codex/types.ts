@@ -180,6 +180,7 @@ export interface CodexToolProgress {
 
 export type CodexEvent =
   | { type: "turn.started"; sessionId: string; turnId: string; startedAt?: string }
+  | { type: "context.compaction"; sessionId: string; turnId: string; phase: "started" | "completed" }
   | { type: "assistant.progress"; sessionId: string; turnId: string; text: string; kind?: CodexProgressKind }
   | { type: "assistant.commentary"; sessionId: string; turnId: string; text: string; itemId?: string }
   | { type: "tool.progress"; sessionId: string; turnId: string; progress: CodexToolProgress }
@@ -247,6 +248,8 @@ export interface CodexSessionDetail extends CodexSessionSummary {
 export interface CodexSessionReloadResult {
   session: CodexSession;
   reloadedAt: string;
+  /** The latest final assistant reply recovered from session history, when supported. */
+  lastAssistantMessage?: string;
 }
 
 export interface CodexCompactResult {

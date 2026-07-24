@@ -76,6 +76,24 @@ test("SessionContextRefreshManager reload mode reloads and updates snapshot", as
   assert.equal(state.getSessionContextSnapshot(session.id)?.fingerprint.rolloutSize, 120);
 });
 
+test("SessionContextRefreshManager keeps the recovered final assistant reply with a reload result", async () => {
+  const state = new MemoryStateStore();
+  const codex = new ReloadReplyCodexAdapter();
+  const session = await codex.startSession({ routeKey: "route", cwd: "/repo" });
+  state.setSessionContextSnapshot({ sessionId: session.id, observedBy: "bind", fingerprint: fp(10, 100, session.id) });
+  const manager = new SessionContextRefreshManager({
+    state,
+    codex,
+    defaultPolicy: { mode: "reload" },
+    readFingerprint: () => fp(20, 120, session.id),
+  });
+
+  const result = await manager.beforeRun({ routeKey: "route", sessionId: session.id });
+
+  assert.equal(result.type, "reloaded");
+  assert.equal(result.type === "reloaded" ? result.lastAssistantMessage : undefined, "终端最新回复");
+});
+
 test("SessionContextRefreshManager blocks send when reload fails after detecting update", async () => {
   const state = new MemoryStateStore();
   const codex = new MockCodexAdapter();
@@ -102,4 +120,11 @@ function fp(updatedAtMs: number, rolloutSize: number, sessionId = "thread"): Cod
     rolloutSize,
     rolloutMtimeMs: updatedAtMs,
   };
+}
+
+class ReloadReplyCodexAdapter extends MockCodexAdapter {
+  override async reloadSession(sessionId: string) {
+    const result = await super.reloadSession(sessionId);
+    return { ...result, lastAssistantMessage: "终端最新回复" };
+  }
 }

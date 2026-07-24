@@ -1,5 +1,6 @@
 import type { ApprovalManager } from "../approvals/approval-manager.js";
 import type { PendingApproval } from "../approvals/types.js";
+import { channelApprovalRequestFromPending } from "../approvals/channel-approval.js";
 import type { Logger } from "../logging/logger.js";
 import type { TranscriptSink } from "../logging/transcript.js";
 import type { ChannelRegistry } from "../channels/registry.js";
@@ -53,14 +54,47 @@ export class BridgeDelivery {
     this.transcript?.outbound(target, text);
   }
 
-  async sendApprovalTextUntilDelivered(routeKey: string, target: ChannelTarget, pending: PendingApproval): Promise<void> {
+  async sendApprovalUntilDelivered(routeKey: string, target: ChannelTarget, pending: PendingApproval): Promise<void> {
     const text = this.approvals.formatForChannel(pending);
+    const approvalRequest = channelApprovalRequestFromPending(pending);
     let failures = 0;
     while (this.isApprovalStillPending(routeKey, pending.approvalKey)) {
+      const cardCapable = Boolean(this.channels.get?.(target.channelId)?.sendApprovalRequest);
       try {
+        if (cardCapable) {
+          const cardResult = await this.channels.sendApprovalRequest?.(target, approvalRequest);
+          if (cardResult) {
+            this.transcript?.outbound(target, text);
+            return;
+          }
+        }
         await this.deliverText(target, text);
         return;
       } catch (error) {
+        const errorText = error instanceof Error ? error.message : String(error);
+        if (cardCapable) {
+          this.logger.warn("approval card send failed; falling back to text", {
+            ...deliveryLogMeta(target),
+            approvalKey: pending.approvalKey,
+            error: errorText,
+          });
+          try {
+            await this.deliverText(target, text);
+            return;
+          } catch (fallbackError) {
+            failures += 1;
+            this.logger.warn("approval message send failed", {
+              ...deliveryLogMeta(target),
+              approvalKey: pending.approvalKey,
+              failures,
+              retryInMs: this.approvalSendRetryDelayMs,
+              error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+            });
+          }
+          if (!this.isApprovalStillPending(routeKey, pending.approvalKey)) return;
+          await sleep(this.approvalSendRetryDelayMs);
+          continue;
+        }
         failures += 1;
         this.logger.warn("approval message send failed", {
           ...deliveryLogMeta(target),

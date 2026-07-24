@@ -14,6 +14,7 @@ import type { TurnScheduler } from "./turn-scheduler.js";
 import { TurnSchedulerAbortError } from "./turn-scheduler.js";
 import type { BridgeDelivery } from "./delivery.js";
 import type { SessionContextRefreshManager } from "./context-refresh.js";
+import { contextCompactionNotice } from "./context-compaction.js";
 import { BridgeProgressDelivery } from "./progress-delivery.js";
 import { BridgeCommentaryDelivery } from "./commentary-delivery.js";
 import { BridgeNotificationDelivery } from "./notification-delivery.js";
@@ -233,7 +234,14 @@ export class BridgeRouteQueue {
       sessionId: session.id,
     });
     if (refreshResult?.type === "detect_only" || refreshResult?.type === "reloaded") {
-      await this.delivery.sendText(target, refreshResult.notice);
+      const refreshNotice = refreshResult.type === "reloaded" && refreshResult.lastAssistantMessage
+        ? [
+            refreshResult.notice,
+            "当前 session 最后一条回复：",
+            refreshResult.lastAssistantMessage,
+          ].join("\n\n")
+        : refreshResult.notice;
+      await this.delivery.sendText(target, refreshNotice);
     } else if (refreshResult?.type === "reload_failed") {
       await this.delivery.sendText(target, refreshResult.errorText);
       return;
@@ -278,6 +286,8 @@ export class BridgeRouteQueue {
                 task: truncateForChannel(promptText || codexInputPlainText(prompt), 120),
                 startedAt: currentTurnStartedAt,
               });
+            } else if (event.type === "context.compaction") {
+              await this.delivery.sendText(target, contextCompactionNotice(event));
             } else if (event.type === "assistant.progress") {
               await this.progressDelivery.handleProgress({
                 routeKey: message.routeKey,
@@ -345,7 +355,7 @@ export class BridgeRouteQueue {
                 startedAt: currentTurnStartedAt,
               });
               const pending = this.approvals.create(message.routeKey, message.sender.id, event.approval);
-              await this.delivery.sendApprovalTextUntilDelivered(message.routeKey, target, pending);
+              await this.delivery.sendApprovalUntilDelivered(message.routeKey, target, pending);
             } else if (event.type === "approval.resolved") {
               this.approvals.resolveAdapterApproval(
                 message.routeKey,

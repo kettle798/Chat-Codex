@@ -24,7 +24,7 @@ export type SessionContextRefreshBeforeRunResult =
   | { type: "no_snapshot"; effective: ContextRefreshEffectivePolicy; current: CodexSessionContextFingerprint }
   | { type: "not_updated"; effective: ContextRefreshEffectivePolicy; current: CodexSessionContextFingerprint }
   | { type: "detect_only"; effective: ContextRefreshEffectivePolicy; current: CodexSessionContextFingerprint; previous: CodexSessionContextFingerprint; notice: string }
-  | { type: "reloaded"; effective: ContextRefreshEffectivePolicy; current: CodexSessionContextFingerprint; previous: CodexSessionContextFingerprint; notice: string }
+  | { type: "reloaded"; effective: ContextRefreshEffectivePolicy; current: CodexSessionContextFingerprint; previous: CodexSessionContextFingerprint; notice: string; lastAssistantMessage?: string }
   | { type: "reload_failed"; effective: ContextRefreshEffectivePolicy; current: CodexSessionContextFingerprint; previous: CodexSessionContextFingerprint; errorText: string }
   | { type: "read_failed"; effective: ContextRefreshEffectivePolicy };
 
@@ -111,6 +111,7 @@ export class SessionContextRefreshManager {
         effective,
         current,
         previous,
+        ...(reloaded.lastAssistantMessage ? { lastAssistantMessage: reloaded.lastAssistantMessage } : {}),
         notice: [
           "检测到本机 Codex session 上下文已更新，已在发送前重新加载。",
           `Session: \`${reloaded.session.id}\``,

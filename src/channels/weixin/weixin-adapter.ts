@@ -141,7 +141,7 @@ export class WeixinAdapter implements ChannelAdapter {
 
   constructor(private readonly options: WeixinAdapterOptions = {}) {
     this.id = options.id ?? "weixin";
-    this.sourceVersion = options.sourceVersion ?? "2.4.4";
+    this.sourceVersion = options.sourceVersion ?? "2.4.6";
     this.botType = options.botType ?? DEFAULT_BOT_TYPE;
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
     this.cdnBaseUrl = options.cdnBaseUrl ?? DEFAULT_WEIXIN_CDN_BASE_URL;
@@ -519,13 +519,16 @@ export class WeixinAdapter implements ChannelAdapter {
       // notifyStart is useful but not required to begin polling
     }
     let getUpdatesBuf = account.getUpdatesBuf ?? "";
+    let longPollTimeoutMs = this.longPollTimeoutMs;
     while (!signal.aborted) {
       try {
         const response = await this.api.getUpdates({
           token: account.token,
           getUpdatesBuf,
-          timeoutMs: this.longPollTimeoutMs,
+          timeoutMs: longPollTimeoutMs,
+          signal,
         });
+        longPollTimeoutMs = nextLongPollTimeoutMs(longPollTimeoutMs, response.longpolling_timeout_ms);
         if (response.ret === SESSION_EXPIRED_ERRCODE || response.errcode === SESSION_EXPIRED_ERRCODE) {
           this.status = {
             ...this.status,
@@ -852,6 +855,12 @@ function stringContextValue(target: ChannelTarget, key: string): string | undefi
 function retryDelayMs(baseDelayMs: number, attempt: number): number {
   if (baseDelayMs <= 0) return 0;
   return baseDelayMs * (2 ** attempt);
+}
+
+function nextLongPollTimeoutMs(currentTimeoutMs: number, serverTimeoutMs: number | undefined): number {
+  return typeof serverTimeoutMs === "number" && Number.isFinite(serverTimeoutMs) && serverTimeoutMs > 0
+    ? serverTimeoutMs
+    : currentTimeoutMs;
 }
 
 function isAbortError(error: unknown): boolean {

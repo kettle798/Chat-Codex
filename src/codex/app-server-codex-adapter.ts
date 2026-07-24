@@ -39,6 +39,7 @@ import { appServerUserInput } from "./app-server/input-mapper.js";
 import { appServerErrorMessage, isTransientAppServerError } from "./app-server/notification-mapper.js";
 import { unsupportedServerRequestResponse, userInputRequestFromServerRequest } from "./app-server/server-request-mapper.js";
 import { mergeSessionSummaries, sessionDetailFromThread, sessionSummaryFromThread } from "./app-server/thread-list.js";
+import { readLastAssistantMessageFromHistory } from "./app-server/thread-history.js";
 import {
   cloneModelPolicy,
   modelInfoFromResponse,
@@ -184,7 +185,15 @@ export class AppServerCodexAdapter implements CodexAdapter {
     const routeKey = this.sessionStore.get(sessionId)?.routeKey;
     this.restartAppServerForReload();
     const session = await this.loadSessionFromServer(sessionId, true, routeKey);
-    return { session, reloadedAt: new Date().toISOString() };
+    const lastAssistantMessage = await readLastAssistantMessageFromHistory(
+      (params) => this.request<Record<string, unknown>>("thread/read", params),
+      sessionId,
+    );
+    return {
+      session,
+      reloadedAt: new Date().toISOString(),
+      ...(lastAssistantMessage ? { lastAssistantMessage } : {}),
+    };
   }
 
   private restartAppServerForReload(): void {

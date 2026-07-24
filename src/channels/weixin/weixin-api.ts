@@ -32,7 +32,7 @@ export class WeixinApiClient {
   constructor(options: WeixinApiClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? "https://ilinkai.weixin.qq.com";
     this.fetchImpl = options.fetch ?? fetch;
-    this.channelVersion = options.channelVersion ?? "2.4.4";
+    this.channelVersion = options.channelVersion ?? "2.4.6";
     this.botAgent = options.botAgent ?? "CodexWeChatMiddleware/0.1.0";
     this.appId = options.appId ?? "bot";
   }
@@ -63,16 +63,27 @@ export class WeixinApiClient {
     token: string;
     getUpdatesBuf?: string;
     timeoutMs?: number;
+    signal?: AbortSignal;
   }): Promise<WeixinGetUpdatesResponse> {
-    return this.postJson<WeixinGetUpdatesResponse>({
-      endpoint: "ilink/bot/getupdates",
-      token: params.token,
-      timeoutMs: params.timeoutMs,
-      body: {
-        get_updates_buf: params.getUpdatesBuf ?? "",
-        base_info: this.baseInfo(),
-      },
-    });
+    try {
+      return await this.postJson<WeixinGetUpdatesResponse>({
+        endpoint: "ilink/bot/getupdates",
+        token: params.token,
+        timeoutMs: params.timeoutMs,
+        signal: params.signal,
+        body: {
+          get_updates_buf: params.getUpdatesBuf ?? "",
+          base_info: this.baseInfo(),
+        },
+      });
+    } catch (error) {
+      if (!isAbortError(error) || params.signal?.aborted) throw error;
+      return {
+        ret: 0,
+        msgs: [],
+        get_updates_buf: params.getUpdatesBuf,
+      };
+    }
   }
 
   async sendMessage(params: {
@@ -213,25 +224,33 @@ export class WeixinApiClient {
     body: unknown;
     token?: string;
     timeoutMs?: number;
+    signal?: AbortSignal;
   }): Promise<T> {
     const response = await this.fetchWithTimeout(this.url(params.endpoint), {
       method: "POST",
       headers: this.jsonHeaders(params.token),
       body: JSON.stringify(params.body),
-    }, params.timeoutMs);
+    }, params.timeoutMs, params.signal);
     return this.parseJson<T>(response, params.endpoint);
   }
 
-  private async fetchWithTimeout(url: string, init: RequestInit, timeoutMs?: number): Promise<Response> {
-    const controller = timeoutMs && timeoutMs > 0 ? new AbortController() : undefined;
-    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
+  private async fetchWithTimeout(
+    url: string,
+    init: RequestInit,
+    timeoutMs?: number,
+    externalSignal?: AbortSignal,
+  ): Promise<Response> {
+    const timeoutController = timeoutMs && timeoutMs > 0 ? new AbortController() : undefined;
+    const timer = timeoutController ? setTimeout(() => timeoutController.abort(), timeoutMs) : undefined;
+    const { signal, cleanup } = combineAbortSignals(timeoutController, externalSignal ?? init.signal ?? undefined);
     try {
       return await this.fetchImpl(url, {
         ...init,
-        ...(controller ? { signal: controller.signal } : {}),
+        ...(signal ? { signal } : {}),
       });
     } finally {
       if (timer) clearTimeout(timer);
+      cleanup();
     }
   }
 
@@ -281,6 +300,32 @@ function buildClientVersion(version: string): number {
 function randomWechatUin(): string {
   const value = crypto.randomBytes(4).readUInt32BE(0);
   return Buffer.from(String(value), "utf-8").toString("base64");
+}
+
+function combineAbortSignals(
+  timeoutController: AbortController | undefined,
+  externalSignal: AbortSignal | undefined,
+): { signal?: AbortSignal; cleanup: () => void } {
+  if (!timeoutController) {
+    return { signal: externalSignal, cleanup: () => undefined };
+  }
+  if (!externalSignal) {
+    return { signal: timeoutController.signal, cleanup: () => undefined };
+  }
+  if (externalSignal.aborted) {
+    timeoutController.abort();
+    return { signal: timeoutController.signal, cleanup: () => undefined };
+  }
+  const abort = () => timeoutController.abort();
+  externalSignal.addEventListener("abort", abort, { once: true });
+  return {
+    signal: timeoutController.signal,
+    cleanup: () => externalSignal.removeEventListener("abort", abort),
+  };
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 interface WeixinApiResponse {

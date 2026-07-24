@@ -15,31 +15,31 @@
 本项目只参考 `@tencent-weixin/openclaw-weixin` 这个 npm 包里的微信通讯能力，不需要下载完整 OpenClaw 源码，也不依赖 OpenClaw CLI、gateway、host runtime 或 channel runtime。
 
 - 包名：`@tencent-weixin/openclaw-weixin`
-- 当前适配参考版本：`2.4.3`
+- 当前适配参考版本：`2.4.6`
 - 本地临时目录：`openclaw-weixin-npm/`
-- 解包后源码：`openclaw-weixin-npm/extracted/openclaw-weixin-2.4.3/`
+- 解包后源码：`openclaw-weixin-npm/extracted/openclaw-weixin-2.4.6/`
 
 在项目根目录执行：
 
 ```bash
 mkdir -p openclaw-weixin-npm
-npm pack @tencent-weixin/openclaw-weixin@2.4.3 --pack-destination openclaw-weixin-npm
+npm pack @tencent-weixin/openclaw-weixin@2.4.6 --pack-destination openclaw-weixin-npm
 rm -rf openclaw-weixin-npm/extracted
 mkdir -p openclaw-weixin-npm/extracted
-tar -xzf openclaw-weixin-npm/tencent-weixin-openclaw-weixin-2.4.3.tgz -C openclaw-weixin-npm/extracted
-mv openclaw-weixin-npm/extracted/package openclaw-weixin-npm/extracted/openclaw-weixin-2.4.3
+tar -xzf openclaw-weixin-npm/tencent-weixin-openclaw-weixin-2.4.6.tgz -C openclaw-weixin-npm/extracted
+mv openclaw-weixin-npm/extracted/package openclaw-weixin-npm/extracted/openclaw-weixin-2.4.6
 ```
 
 可选校验：
 
 ```bash
-shasum -a 256 openclaw-weixin-npm/tencent-weixin-openclaw-weixin-2.4.3.tgz
+shasum -a 256 openclaw-weixin-npm/tencent-weixin-openclaw-weixin-2.4.6.tgz
 ```
 
 当前已知 SHA-256：
 
 ```text
-422ee96c2fca294d6d80c193c2797d2a046cb8b512b84b0705c85865f0251bb7  tencent-weixin-openclaw-weixin-2.4.3.tgz
+ef1c3600ca2fc0ee9076c1327af1e0d5d2e8e19fbb61e9f56c961fcde0bd07f6  tencent-weixin-openclaw-weixin-2.4.6.tgz
 ```
 
 常用参考文件：
@@ -58,9 +58,11 @@ shasum -a 256 openclaw-weixin-npm/tencent-weixin-openclaw-weixin-2.4.3.tgz
 - 源码仓库：`https://github.com/larksuite/openclaw-lark`
 - npm 包名：`@larksuite/openclaw-lark`
 - npm 包页面：`https://www.npmjs.com/package/@larksuite/openclaw-lark`
-- 当前 npm latest：`2026.5.13`
-- 当前 npm tarball：`https://registry.npmjs.org/@larksuite/openclaw-lark/-/openclaw-lark-2026.5.13.tgz`
+- 当前 npm latest：`2026.7.9`
+- 当前 npm tarball：`https://registry.npmjs.org/@larksuite/openclaw-lark/-/openclaw-lark-2026.7.9.tgz`
 - 本地临时源码目录：`references/openclaw-lark/`
+- 本地 npm 解包目录：`openclaw-lark-npm/extracted/openclaw-lark-2026.7.9/`
+- 当前 tarball SHA-256：`27b1ead3ca54b855cd9ba709b9296658eafee6d99c8a98e0b4932d122fef107f`
 
 在项目根目录执行：
 

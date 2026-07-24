@@ -2,6 +2,10 @@ import type { Logger } from "../logging/logger.js";
 import { SilentLogger } from "../logging/logger.js";
 import type {
   ChannelAdapter,
+  ChannelApprovalAction,
+  ChannelApprovalActionHandler,
+  ChannelApprovalActionResult,
+  ChannelApprovalRequest,
   ChannelCapabilities,
   ChannelMedia,
   ChannelMessage,
@@ -36,6 +40,7 @@ export class ChannelRegistry {
   private readonly channels = new Map<string, ChannelAdapter>();
   private readonly logger: Logger;
   private handler?: ChannelMessageHandler;
+  private approvalActionHandler?: ChannelApprovalActionHandler;
   private readonly lifecycleFailures: ChannelLifecycleResult[] = [];
 
   constructor(options: ChannelRegistryOptions) {
@@ -49,6 +54,7 @@ export class ChannelRegistry {
       }
       this.channels.set(channel.id, channel);
       channel.onMessage((message) => this.handleMessage(channel, message));
+      channel.onApprovalAction?.((action) => this.handleApprovalAction(channel, action));
     }
   }
 
@@ -72,6 +78,10 @@ export class ChannelRegistry {
 
   onMessage(handler: ChannelMessageHandler): void {
     this.handler = handler;
+  }
+
+  onApprovalAction(handler: ChannelApprovalActionHandler): void {
+    this.approvalActionHandler = handler;
   }
 
   async start(): Promise<ChannelLifecycleResult[]> {
@@ -152,6 +162,15 @@ export class ChannelRegistry {
     return this.requireTargetChannel(target).sendText(target, text, options);
   }
 
+  async sendApprovalRequest(
+    target: ChannelTarget,
+    approval: ChannelApprovalRequest,
+  ): Promise<SendResult | undefined> {
+    const channel = this.requireTargetChannel(target);
+    if (!channel.sendApprovalRequest) return undefined;
+    return channel.sendApprovalRequest(target, approval);
+  }
+
   async sendMedia(target: ChannelTarget, media: ChannelMedia, options?: SendOptions): Promise<SendResult> {
     const channel = this.requireTargetChannel(target);
     const capabilities = channel.getCapabilities();
@@ -192,6 +211,33 @@ export class ChannelRegistry {
       return;
     }
     await this.handler?.(message);
+  }
+
+  private async handleApprovalAction(
+    channel: ChannelAdapter,
+    action: ChannelApprovalAction,
+  ): Promise<ChannelApprovalActionResult> {
+    const message = action.message;
+    if (message.channelId !== channel.id) {
+      this.logger.error("channel approval action id mismatch", {
+        adapterChannel: channel.id,
+        messageChannel: message.channelId,
+        routeKey: message.routeKey,
+      });
+      return { status: "rejected", text: "审批动作所属渠道无效。" };
+    }
+    if (!this.supportsConversation(channel, message)) {
+      this.logger.warn("channel approval action conversation unsupported", {
+        channel: channel.id,
+        conversationKind: message.conversation.kind,
+        routeKey: message.routeKey,
+      });
+      return { status: "rejected", text: "当前聊天不支持审批卡片。" };
+    }
+    if (!this.approvalActionHandler) {
+      return { status: "rejected", text: "审批处理服务尚未启动。" };
+    }
+    return this.approvalActionHandler(action);
   }
 
   private supportsConversation(channel: ChannelAdapter, message: ChannelMessage): boolean {

@@ -6,7 +6,11 @@ import { MockCodexAdapter } from "../../src/codex/mock-codex-adapter.js";
 import type { CodexEvent } from "../../src/codex/types.js";
 import { SilentLogger } from "../../src/logging/logger.js";
 import { MemoryStateStore } from "../../src/state/memory-state-store.js";
-import { FakeFeishuTransportFactory, sampleFeishuTextEvent } from "../helpers/feishu-fakes.js";
+import {
+  FakeFeishuTransportFactory,
+  sampleFeishuCardActionEvent,
+  sampleFeishuTextEvent,
+} from "../helpers/feishu-fakes.js";
 
 class FeishuProgressCodexAdapter extends MockCodexAdapter {
   override async *run(sessionId: string, prompt: string): AsyncIterable<CodexEvent> {
@@ -246,6 +250,52 @@ test("Feishu trusted private chat cannot enable group receive in the 0.1.5 publi
   assert.equal(texts.filter((text) => text.includes("暂不支持开启群聊接收")).length, 2);
   assert.equal(texts.some((text) => text.includes("已开启飞书群聊接收")), false);
   assert.equal(texts.some((text) => text.includes("已关闭飞书群聊接收")), false);
+});
+
+test("Feishu private approval card resolves through the shared Bridge approval flow", async () => {
+  const factory = new FakeFeishuTransportFactory();
+  const codex = new MockCodexAdapter();
+  const channel = new FeishuAdapter({ ...credentials, transportFactory: factory });
+  const bridge = new Bridge({
+    channel,
+    codex,
+    logger: new SilentLogger(),
+    cwd: process.cwd(),
+  });
+
+  await bridge.start();
+  await factory.dispatcher.emitReceive(feishuInbound("请触发审批 approval", "om_approval"));
+  await bridge.waitForIdle();
+
+  const cardPayload = factory.client.replyPayloads.find((payload) => payload.data.msg_type === "interactive");
+  assert.ok(cardPayload, "approval should be sent as an interactive card");
+  const card = JSON.parse(cardPayload.data.content) as {
+    elements: Array<{ tag?: string; actions?: Array<{ value: Record<string, unknown> }> }>;
+  };
+  const actionValue = card.elements.find((element) => element.tag === "action")?.actions?.[0]?.value;
+  assert.deepEqual(actionValue, {
+    action: "chat_codex_approval",
+    approvalKey: "a001",
+    decision: "approve",
+  });
+  assert.equal(factory.client.sentTexts().some((text) => text.includes("Codex 请求审批")), false);
+
+  const response = await factory.dispatcher.emitCardAction(sampleFeishuCardActionEvent({
+    app_id: credentials.appId,
+    context: { open_message_id: "om_reply", open_chat_id: "oc_private" },
+    operator: { open_id: "ou_user" },
+    action: { value: actionValue },
+  })) as {
+    toast?: { type?: string; content?: string };
+    card?: { type?: string };
+  };
+
+  assert.equal(codex.resolvedApprovals.length, 1);
+  assert.equal(codex.resolvedApprovals[0]?.decision, "approve");
+  assert.equal(response.toast?.type, "success");
+  assert.match(response.toast?.content ?? "", /已通过/);
+  assert.equal(response.card?.type, "raw");
+  await bridge.stop();
 });
 
 function feishuInbound(text: string, messageId: string) {

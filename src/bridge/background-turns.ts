@@ -9,6 +9,7 @@ import type { MemoryStateStore } from "../state/memory-state-store.js";
 import type { BackgroundTurnState } from "./bridge-types.js";
 import { composeFinalAnswer } from "./formatters.js";
 import type { BridgeDelivery } from "./delivery.js";
+import { contextCompactionNotice } from "./context-compaction.js";
 import { BridgeProgressDelivery } from "./progress-delivery.js";
 import { BridgeCommentaryDelivery } from "./commentary-delivery.js";
 import { BridgeNotificationDelivery } from "./notification-delivery.js";
@@ -31,6 +32,7 @@ export interface BridgeBackgroundTurnsOptions {
   shouldDeliverCommentaryWithPolicy(policy: ChannelDeliveryPolicy, routeKey: string): boolean;
   isRealtimeCommentaryWithPolicy(policy: ChannelDeliveryPolicy, routeKey: string): boolean;
   shouldDeliverToolProgressWithPolicy(policy: ChannelDeliveryPolicy, routeKey: string): boolean;
+  shouldDeliverContextCompaction?(routeKey: string, sessionId: string): boolean;
   progressDelivery?: BridgeProgressDelivery;
   commentaryDelivery?: BridgeCommentaryDelivery;
   notificationDelivery?: BridgeNotificationDelivery;
@@ -52,6 +54,7 @@ export class BridgeBackgroundTurns {
   private readonly progressDelivery: BridgeProgressDelivery;
   private readonly commentaryDelivery: BridgeCommentaryDelivery;
   private readonly shouldDeliverToolProgressWithPolicy: BridgeBackgroundTurnsOptions["shouldDeliverToolProgressWithPolicy"];
+  private readonly shouldDeliverContextCompaction: NonNullable<BridgeBackgroundTurnsOptions["shouldDeliverContextCompaction"]>;
   private readonly notificationDelivery: BridgeNotificationDelivery;
   private readonly pendingInput?: BridgePendingInputManager;
   private readonly startRouteWorker: BridgeBackgroundTurnsOptions["startRouteWorker"];
@@ -80,6 +83,7 @@ export class BridgeBackgroundTurns {
       isRealtimeCommentary: options.isRealtimeCommentaryWithPolicy,
     });
     this.shouldDeliverToolProgressWithPolicy = options.shouldDeliverToolProgressWithPolicy;
+    this.shouldDeliverContextCompaction = options.shouldDeliverContextCompaction ?? (() => true);
     this.notificationDelivery = options.notificationDelivery ?? new BridgeNotificationDelivery({
       state: this.state,
       delivery: this.delivery,
@@ -111,6 +115,10 @@ export class BridgeBackgroundTurns {
         startedAt: event.startedAt ?? new Date().toISOString(),
       });
       this.startTypingKeepalive(state);
+    } else if (event.type === "context.compaction") {
+      if (this.shouldDeliverContextCompaction(state.routeKey, event.sessionId)) {
+        await this.delivery.sendText(state.target, contextCompactionNotice(event));
+      }
     } else if (event.type === "assistant.progress") {
       await this.progressDelivery.handleProgress({
         routeKey: state.routeKey,
@@ -179,7 +187,7 @@ export class BridgeBackgroundTurns {
         startedAt: currentStartedAt(this.state.getSession(event.sessionId)?.status),
       });
       const pending = this.approvals.create(state.routeKey, state.message.sender.id, event.approval);
-      await this.delivery.sendApprovalTextUntilDelivered(state.routeKey, state.target, pending);
+      await this.delivery.sendApprovalUntilDelivered(state.routeKey, state.target, pending);
     } else if (event.type === "approval.resolved") {
       this.approvals.resolveAdapterApproval(
         state.routeKey,

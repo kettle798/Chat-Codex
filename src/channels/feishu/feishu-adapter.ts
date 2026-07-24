@@ -8,6 +8,8 @@ import {
 } from "@larksuiteoapi/node-sdk";
 import type {
   ChannelAdapter,
+  ChannelApprovalActionHandler,
+  ChannelApprovalRequest,
   ChannelCapabilities,
   ChannelLoginResult,
   ChannelMedia,
@@ -33,6 +35,7 @@ import {
   missingFeishuCredentials,
   normalizeFeishuCredentials,
 } from "./feishu-message.js";
+import { FeishuApprovalCardController } from "./feishu-approval-card-controller.js";
 import { FEISHU_GROUP_RECEIVE_PUBLICLY_ENABLED } from "./feishu-feature-flags.js";
 import {
   downloadFeishuInboundAttachments,
@@ -44,6 +47,7 @@ import type {
   FeishuAdapterOptions,
   FeishuApiResponse,
   FeishuBotIdentity,
+  FeishuCardActionTriggerEvent,
   FeishuCredentials,
   FeishuEventDispatcher,
   FeishuEventHandlers,
@@ -89,6 +93,7 @@ export class FeishuAdapter implements ChannelAdapter {
   private readonly now: () => number;
   private readonly inboundMediaRootDir?: string;
   private handler?: ChannelMessageHandler;
+  private readonly approvalCards: FeishuApprovalCardController;
   private status: ChannelStatus;
   private client?: FeishuSdkClient;
   private dispatcher?: FeishuEventDispatcher;
@@ -110,6 +115,14 @@ export class FeishuAdapter implements ChannelAdapter {
     this.transportFactory = options.transportFactory ?? new DefaultFeishuTransportFactory();
     this.now = options.now ?? Date.now;
     this.inboundMediaRootDir = options.inboundMediaRootDir;
+    this.approvalCards = new FeishuApprovalCardController({
+      channelId: this.id,
+      accountId: this.credentials.accountId ?? DEFAULT_FEISHU_ACCOUNT_ID,
+      expectedAppId: this.credentials.appId,
+      dedupTtlMs: this.dedupTtlMs,
+      now: this.now,
+      sendInteractiveCard: (target, content) => this.sendFeishuMessage(target, "interactive", content),
+    });
     this.status = {
       channelId: this.id,
       state: missingFeishuCredentials(this.credentials).length > 0 ? "login_required" : "stopped",
@@ -173,6 +186,7 @@ export class FeishuAdapter implements ChannelAdapter {
     this.wsClient = undefined;
     this.dispatcher = undefined;
     this.typingReactions.clear();
+    this.approvalCards.clear();
     this.status = {
       ...this.status,
       state: "stopped",
@@ -231,6 +245,10 @@ export class FeishuAdapter implements ChannelAdapter {
     this.handler = handler;
   }
 
+  onApprovalAction(handler: ChannelApprovalActionHandler): void {
+    this.approvalCards.onApprovalAction(handler);
+  }
+
   setGroupEnabled(enabled: boolean): void {
     this.groupEnabled = FEISHU_GROUP_RECEIVE_PUBLICLY_ENABLED && enabled;
     this.status = {
@@ -241,6 +259,10 @@ export class FeishuAdapter implements ChannelAdapter {
 
   async sendText(target: ChannelTarget, text: string, options?: SendOptions): Promise<SendResult> {
     return this.sendFeishuMessage(target, "post", buildFeishuPostContent(text), options);
+  }
+
+  async sendApprovalRequest(target: ChannelTarget, approval: ChannelApprovalRequest): Promise<SendResult> {
+    return this.approvalCards.send(target, approval);
   }
 
   async sendMedia(target: ChannelTarget, media: ChannelMedia, options?: SendOptions): Promise<SendResult> {
@@ -336,7 +358,8 @@ export class FeishuAdapter implements ChannelAdapter {
 
   private eventHandlers(): FeishuEventHandlers {
     return {
-      "im.message.receive_v1": (event) => this.handleIncomingEvent(event),
+      "im.message.receive_v1": (event) => this.handleIncomingEvent(event as FeishuMessageReceiveEvent),
+      "card.action.trigger": (event) => this.handleApprovalCardAction(event as FeishuCardActionTriggerEvent),
     };
   }
 
@@ -410,6 +433,20 @@ export class FeishuAdapter implements ChannelAdapter {
         details: this.statusDetails("handler-failed"),
       };
     }
+  }
+
+  private async handleApprovalCardAction(event: FeishuCardActionTriggerEvent): Promise<unknown> {
+    const result = await this.approvalCards.handle(event);
+    if (result.type === "skipped") {
+      this.recordApprovalCardSkip(result.reason);
+      return result.response;
+    }
+    this.status = {
+      ...this.status,
+      lastInboundAt: result.message.timestamp,
+      details: this.statusDetails("approval-card-action"),
+    };
+    return result.response;
   }
 
   private async probeBotIdentity(): Promise<FeishuProbeResult> {
@@ -604,6 +641,16 @@ export class FeishuAdapter implements ChannelAdapter {
     if (this.seenMessages.has(messageId)) return false;
     this.seenMessages.set(messageId, now + this.dedupTtlMs);
     return true;
+  }
+
+  private recordApprovalCardSkip(reason: string): void {
+    this.status = {
+      ...this.status,
+      details: {
+        ...this.statusDetails("approval-card-skipped"),
+        lastSkipReason: reason,
+      },
+    };
   }
 
   private statusDetails(phase: string): Record<string, unknown> {

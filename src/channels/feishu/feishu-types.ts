@@ -226,7 +226,29 @@ export interface FeishuMessageReceiveEvent {
   };
 }
 
-export type FeishuEventHandlers = Record<string, (data: FeishuMessageReceiveEvent) => Promise<unknown> | unknown>;
+export interface FeishuCardActionTriggerEvent {
+  event_id?: string;
+  event_type?: string;
+  app_id?: string;
+  open_message_id?: string;
+  open_chat_id?: string;
+  context?: {
+    open_message_id?: string;
+    open_chat_id?: string;
+  };
+  operator?: {
+    open_id?: string;
+    user_id?: string;
+    name?: string;
+  };
+  action?: {
+    tag?: string;
+    name?: string;
+    value?: unknown;
+  };
+}
+
+export type FeishuEventHandlers = Record<string, (data: unknown) => Promise<unknown> | unknown>;
 
 export type FeishuMessageMappingResult =
   | { ok: true; message: ChannelMessage }

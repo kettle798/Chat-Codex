@@ -3,7 +3,7 @@ import type { ApprovalManager } from "../../approvals/approval-manager.js";
 import type { CodexAdapter } from "../../codex/types.js";
 import type { ChannelMessage, ChannelTarget } from "../../protocol/channel.js";
 import type { BridgeDelivery } from "../delivery.js";
-import { formatApprovalDecision } from "../formatters.js";
+import { resolveApproval } from "../approval-resolution.js";
 
 export interface ApprovalCommandOptions {
   approvals: ApprovalManager;
@@ -24,13 +24,12 @@ export async function handleApprovalCommand(
     await options.delivery.sendText(target, "当前没有待处理审批。");
     return;
   }
-  try {
-    const pending = options.approvals.decide(key, message.routeKey, decision);
-    await options.codex.resolveApproval?.(pending.adapterApprovalId ?? pending.approvalKey, decision);
-    await options.delivery.sendText(target, `审批已处理: ${formatApprovalDecision(decision)}`);
-  } catch (error) {
-    await options.delivery.sendText(target, error instanceof Error ? error.message : String(error));
-  }
+  const result = await resolveApproval(options, {
+    approvalKey: key,
+    routeKey: message.routeKey,
+    decision,
+  });
+  await options.delivery.sendText(target, result.text);
 }
 
 function parseApprovalArgs(approvals: ApprovalManager, routeKey: string, args: string[]): {

@@ -59,6 +59,40 @@ export interface ChannelMessage {
   raw?: unknown;
 }
 
+export type ChannelApprovalDecision = "approve" | "approve-session" | "deny";
+
+export interface ChannelApprovalRequest {
+  approvalKey: string;
+  routeKey: string;
+  requestedBy: string;
+  kind: string;
+  sessionId: string;
+  turnId: string;
+  itemId: string;
+  command?: string;
+  cwd?: string;
+  reason?: string;
+  risk?: "low" | "medium" | "high" | "unknown";
+  availableDecisions: ChannelApprovalDecision[];
+}
+
+export interface ChannelApprovalAction {
+  approvalKey: string;
+  decision: ChannelApprovalDecision;
+  message: ChannelMessage;
+}
+
+export type ChannelApprovalActionResult =
+  | {
+    status: "resolved";
+    text: string;
+    decision: ChannelApprovalDecision;
+  }
+  | {
+    status: "rejected";
+    text: string;
+  };
+
 export interface ChannelStatus {
   channelId: string;
   state: ChannelState;
@@ -123,6 +157,7 @@ export interface SendResult {
 }
 
 export type ChannelMessageHandler = (message: ChannelMessage) => Promise<void>;
+export type ChannelApprovalActionHandler = (action: ChannelApprovalAction) => Promise<ChannelApprovalActionResult>;
 
 export interface ChannelAdapter {
   id: string;
@@ -134,10 +169,16 @@ export interface ChannelAdapter {
   getCapabilities(): ChannelCapabilities;
   getDeliveryPolicy?(message?: ChannelMessage): ChannelDeliveryPolicy;
   onMessage(handler: ChannelMessageHandler): void;
+  onApprovalAction?(handler: ChannelApprovalActionHandler): void;
   sendText(target: ChannelTarget, text: string, options?: SendOptions): Promise<SendResult>;
+  sendApprovalRequest?(target: ChannelTarget, approval: ChannelApprovalRequest): Promise<SendResult>;
   sendMedia?(target: ChannelTarget, media: ChannelMedia, options?: SendOptions): Promise<SendResult>;
   sendTyping?(target: ChannelTarget, typing: boolean, options?: SendOptions): Promise<void>;
   sendToolProgress?(target: ChannelTarget, progress: ChannelToolProgress, options?: SendOptions): Promise<SendResult>;
+}
+
+export function isChannelApprovalDecision(value: unknown): value is ChannelApprovalDecision {
+  return value === "approve" || value === "approve-session" || value === "deny";
 }
 
 export function buildRouteKey(input: {

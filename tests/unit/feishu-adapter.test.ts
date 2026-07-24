@@ -4,7 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { FeishuAdapter } from "../../src/channels/feishu/feishu-adapter.js";
-import { FakeFeishuTransportFactory, sampleFeishuTextEvent } from "../helpers/feishu-fakes.js";
+import type { ChannelApprovalRequest } from "../../src/protocol/channel.js";
+import {
+  FakeFeishuTransportFactory,
+  sampleFeishuCardActionEvent,
+  sampleFeishuTextEvent,
+} from "../helpers/feishu-fakes.js";
 
 const credentials = {
   appId: "cli_1234567890abcdef",
@@ -442,8 +447,255 @@ test("FeishuAdapter sendText replies to source message first", async () => {
   assert.match(factory.client.sentTexts()[0], /回复内容/);
 });
 
+test("FeishuAdapter sends direct approval cards and returns a resolved card callback", async () => {
+  const factory = new FakeFeishuTransportFactory();
+  const adapter = new FeishuAdapter({ ...credentials, transportFactory: factory });
+  const actions: Array<{ approvalKey: string; decision: string; senderId: string }> = [];
+  adapter.onApprovalAction(async (action) => {
+    actions.push({
+      approvalKey: action.approvalKey,
+      decision: action.decision,
+      senderId: action.message.sender.id,
+    });
+    return {
+      status: "resolved",
+      text: "审批已处理: 已通过",
+      decision: action.decision,
+    };
+  });
+
+  await adapter.start();
+  const result = await adapter.sendApprovalRequest(approvalTarget(), approvalRequest());
+  const payload = factory.client.replyPayloads.at(-1);
+  assert.equal(result.messageId, "om_reply");
+  assert.equal(payload?.data.msg_type, "interactive");
+  const card = JSON.parse(payload?.data.content ?? "{}") as {
+    elements?: Array<{ tag?: string; actions?: Array<{ value: Record<string, unknown> }> }>;
+  };
+  const approveAction = card.elements?.find((element) => element.tag === "action")?.actions?.[0];
+  assert.deepEqual(approveAction?.value, {
+    action: "chat_codex_approval",
+    approvalKey: "a001",
+    decision: "approve",
+  });
+
+  const response = await factory.dispatcher.emitCardAction(sampleFeishuCardActionEvent({
+    context: { open_message_id: "om_reply", open_chat_id: "oc_user" },
+    operator: { open_id: "ou_user" },
+    action: { value: approveAction?.value },
+  })) as {
+    toast?: { type?: string; content?: string };
+    card?: { type?: string };
+  };
+
+  assert.deepEqual(actions, [{ approvalKey: "a001", decision: "approve", senderId: "ou_user" }]);
+  assert.equal(response.toast?.type, "success");
+  assert.match(response.toast?.content ?? "", /已通过/);
+  assert.equal(response.card?.type, "raw");
+  await adapter.stop();
+});
+
+test("FeishuAdapter rejects approval card actions from another private user", async () => {
+  const factory = new FakeFeishuTransportFactory();
+  const adapter = new FeishuAdapter({ ...credentials, transportFactory: factory });
+  let handled = 0;
+  adapter.onApprovalAction(async () => {
+    handled += 1;
+    return { status: "resolved", text: "审批已处理: 已通过", decision: "approve" };
+  });
+
+  await adapter.start();
+  await adapter.sendApprovalRequest(approvalTarget(), approvalRequest());
+  const response = await factory.dispatcher.emitCardAction(sampleFeishuCardActionEvent({
+    context: { open_message_id: "om_reply", open_chat_id: "oc_user" },
+    operator: { open_id: "ou_other" },
+  })) as { toast?: { type?: string; content?: string } };
+
+  assert.equal(handled, 0);
+  assert.equal(response.toast?.type, "warning");
+  assert.match(response.toast?.content ?? "", /只有发起该审批/);
+  await adapter.stop();
+});
+
+test("FeishuAdapter keeps multiple direct approval cards independent", async () => {
+  const factory = new FakeFeishuTransportFactory();
+  const adapter = new FeishuAdapter({ ...credentials, transportFactory: factory });
+  const actions: Array<{ approvalKey: string; decision: string }> = [];
+  adapter.onApprovalAction(async (action) => {
+    actions.push({ approvalKey: action.approvalKey, decision: action.decision });
+    return {
+      status: "resolved",
+      text: `审批已处理: ${action.decision}`,
+      decision: action.decision,
+    };
+  });
+
+  await adapter.start();
+  factory.client.replyResponse = {
+    code: 0,
+    data: { message_id: "om_card_1", chat_id: "oc_user" },
+  };
+  await adapter.sendApprovalRequest(approvalTarget(), approvalRequest());
+  factory.client.replyResponse = {
+    code: 0,
+    data: { message_id: "om_card_2", chat_id: "oc_user" },
+  };
+  await adapter.sendApprovalRequest(approvalTarget(), approvalRequest({
+    approvalKey: "a002",
+    turnId: "turn-2",
+    itemId: "item-2",
+  }));
+
+  const secondResponse = await factory.dispatcher.emitCardAction(sampleFeishuCardActionEvent({
+    context: { open_message_id: "om_card_2", open_chat_id: "oc_user" },
+    operator: { open_id: "ou_user" },
+    action: {
+      value: { action: "chat_codex_approval", approvalKey: "a002", decision: "deny" },
+    },
+  })) as { toast?: { type?: string }; card?: { type?: string } };
+  const firstResponse = await factory.dispatcher.emitCardAction(sampleFeishuCardActionEvent({
+    context: { open_message_id: "om_card_1", open_chat_id: "oc_user" },
+    operator: { open_id: "ou_user" },
+    action: {
+      value: { action: "chat_codex_approval", approvalKey: "a001", decision: "approve" },
+    },
+  })) as { toast?: { type?: string }; card?: { type?: string } };
+
+  assert.deepEqual(actions, [
+    { approvalKey: "a002", decision: "deny" },
+    { approvalKey: "a001", decision: "approve" },
+  ]);
+  assert.equal(secondResponse.toast?.type, "success");
+  assert.equal(secondResponse.card?.type, "raw");
+  assert.equal(firstResponse.toast?.type, "success");
+  assert.equal(firstResponse.card?.type, "raw");
+  await adapter.stop();
+});
+
+test("FeishuAdapter rejects an approval action copied from another card", async () => {
+  const factory = new FakeFeishuTransportFactory();
+  const adapter = new FeishuAdapter({ ...credentials, transportFactory: factory });
+  let handled = 0;
+  adapter.onApprovalAction(async (action) => {
+    handled += 1;
+    return {
+      status: "resolved",
+      text: "审批已处理: 已通过",
+      decision: action.decision,
+    };
+  });
+
+  await adapter.start();
+  factory.client.replyResponse = {
+    code: 0,
+    data: { message_id: "om_card_1", chat_id: "oc_user" },
+  };
+  await adapter.sendApprovalRequest(approvalTarget(), approvalRequest());
+  factory.client.replyResponse = {
+    code: 0,
+    data: { message_id: "om_card_2", chat_id: "oc_user" },
+  };
+  await adapter.sendApprovalRequest(approvalTarget(), approvalRequest({
+    approvalKey: "a002",
+    turnId: "turn-2",
+    itemId: "item-2",
+  }));
+
+  const response = await factory.dispatcher.emitCardAction(sampleFeishuCardActionEvent({
+    context: { open_message_id: "om_card_1", open_chat_id: "oc_user" },
+    operator: { open_id: "ou_user" },
+    action: {
+      value: { action: "chat_codex_approval", approvalKey: "a002", decision: "approve" },
+    },
+  })) as { toast?: { type?: string; content?: string } };
+
+  assert.equal(handled, 0);
+  assert.equal(response.toast?.type, "warning");
+  assert.match(response.toast?.content ?? "", /审批动作无效/);
+  await adapter.stop();
+});
+
+test("FeishuAdapter allows retrying an approval card after a transient handler failure", async () => {
+  const factory = new FakeFeishuTransportFactory();
+  const adapter = new FeishuAdapter({ ...credentials, transportFactory: factory });
+  let attempts = 0;
+  adapter.onApprovalAction(async (action) => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("temporary Bridge failure");
+    return {
+      status: "resolved",
+      text: "审批已处理: 已通过",
+      decision: action.decision,
+    };
+  });
+
+  await adapter.start();
+  await adapter.sendApprovalRequest(approvalTarget(), approvalRequest());
+  const event = sampleFeishuCardActionEvent({
+    context: { open_message_id: "om_reply", open_chat_id: "oc_user" },
+    operator: { open_id: "ou_user" },
+  });
+  const firstResponse = await factory.dispatcher.emitCardAction(event) as {
+    toast?: { type?: string; content?: string };
+  };
+  const secondResponse = await factory.dispatcher.emitCardAction(event) as {
+    toast?: { type?: string; content?: string };
+    card?: { type?: string };
+  };
+
+  assert.equal(attempts, 2);
+  assert.equal(firstResponse.toast?.type, "error");
+  assert.match(firstResponse.toast?.content ?? "", /审批处理失败/);
+  assert.equal(secondResponse.toast?.type, "success");
+  assert.equal(secondResponse.card?.type, "raw");
+  await adapter.stop();
+});
+
+test("FeishuAdapter does not send approval cards to non-direct conversations", async () => {
+  const factory = new FakeFeishuTransportFactory();
+  const adapter = new FeishuAdapter({ ...credentials, transportFactory: factory, connectOnStart: false });
+  await adapter.start();
+
+  await assert.rejects(
+    () => adapter.sendApprovalRequest({
+      ...approvalTarget(),
+      routeKey: "feishu:work:group:oc_group",
+      conversation: { id: "oc_group", kind: "group" },
+    }, approvalRequest()),
+    /仅支持私聊/,
+  );
+  assert.equal(factory.client.replyPayloads.length, 0);
+  await adapter.stop();
+});
+
 function tempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+
+function approvalTarget() {
+  return {
+    channelId: "feishu",
+    routeKey: "feishu:work:direct:oc_user",
+    accountId: "work",
+    conversation: { id: "oc_user", kind: "direct" as const },
+    recipient: { id: "ou_user" },
+    context: { sourceMessageId: "om_source" },
+  };
+}
+
+function approvalRequest(overrides: Partial<ChannelApprovalRequest> = {}): ChannelApprovalRequest {
+  return {
+    approvalKey: "a001",
+    routeKey: "feishu:work:direct:oc_user",
+    requestedBy: "ou_user",
+    kind: "command",
+    sessionId: "session-1234567890",
+    turnId: "turn-1234567890",
+    itemId: "item-1",
+    command: "npm test",
+    availableDecisions: ["approve", "approve-session", "deny"],
+    ...overrides,
+  };
 }
 
 test("FeishuAdapter sendText falls back to chat_id create when reply fails", async () => {

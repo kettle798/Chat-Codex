@@ -79,6 +79,18 @@ class ProgressCodexAdapter extends MockCodexAdapter {
   }
 }
 
+class ContextCompactionCodexAdapter extends MockCodexAdapter {
+  override async *run(sessionId: string, _prompt: string): AsyncIterable<CodexEvent> {
+    const turnId = `context-compaction-turn-${Date.now()}`;
+    yield { type: "turn.started", sessionId, turnId };
+    yield { type: "assistant.progress", sessionId, turnId, kind: "reasoning", text: "普通进度不应发送" };
+    yield { type: "context.compaction", sessionId, turnId, phase: "started" };
+    yield { type: "context.compaction", sessionId, turnId, phase: "completed" };
+    yield { type: "assistant.completed", sessionId, turnId, text: "完成" };
+    yield { type: "turn.completed", sessionId, turnId };
+  }
+}
+
 class NoAutoReviewCodexAdapter extends MockCodexAdapter {
   override getRunPolicyStatus(sessionId?: string): CodexRunPolicyStatus {
     return {
@@ -2550,6 +2562,22 @@ test("Bridge defaults weixin to silent progress while keeping final replies", as
   assert.equal(transcript.localProgressEvents.length, 2);
   assert.ok(transcript.localProgressEvents.some((event) => event.text.includes("我先列一个工具调用计划")));
   assert.ok(transcript.localProgressEvents.some((event) => event.text.includes("正在执行命令: npm test")));
+});
+
+test("Bridge sends context compaction notices to weixin even when normal progress is silent", async () => {
+  const channel = new WeixinLikeChannelAdapter();
+  const codex = new ContextCompactionCodexAdapter();
+  const bridge = new Bridge({ channel, codex, cwd: process.cwd() });
+
+  await bridge.start();
+  await channel.emitText("继续");
+  await bridge.waitForIdle();
+  await bridge.stop();
+
+  const texts = channel.sentMessages.map((message) => message.text);
+  assert.ok(texts.includes("Codex 正在压缩当前会话的上下文。"));
+  assert.ok(texts.includes("Codex 已完成当前会话的上下文压缩。"));
+  assert.equal(texts.some((text) => text.includes("普通进度不应发送")), false);
 });
 
 test("Bridge rejects detailed and tools progress modes on weixin-like channel", async () => {

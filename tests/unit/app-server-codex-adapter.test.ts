@@ -170,6 +170,26 @@ rl.on("line", (line) => {
     return;
   }
   if (message.method === "thread/read") {
+    if (message.params.includeTurns === true) {
+      send({
+        id: message.id,
+        result: {
+          thread: {
+            ...thread("/repo/read-history"),
+            id: message.params.threadId,
+            sessionId: message.params.threadId,
+            turns: [{
+              id: "history-turn-1",
+              items: [
+                { type: "agentMessage", id: "history-commentary", text: "终端旁白，不应投递", phase: "commentary", memoryCitation: null },
+                { type: "agentMessage", id: "history-final", text: "终端最新最终回复", phase: "final_answer", memoryCitation: null },
+              ],
+            }],
+          },
+        },
+      });
+      return;
+    }
     if (message.params.includeTurns !== false) {
       send({ id: message.id, error: { code: -32602, message: "includeTurns must be false" } });
       return;
@@ -1248,6 +1268,22 @@ test("AppServerCodexAdapter manages experimental thread goals", async () => {
   assert.equal(empty, null);
 });
 
+test("AppServerCodexAdapter reloads a session and recovers its last final assistant reply", async () => {
+  const root = tempDir();
+  const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
+  const session = await adapter.startSession({
+    routeKey: "route-1",
+    cwd: root,
+    title: "test",
+  });
+
+  const reloaded = await adapter.reloadSession(session.id);
+  await adapter.stop();
+
+  assert.equal(reloaded.session.id, session.id);
+  assert.equal(reloaded.lastAssistantMessage, "终端最新最终回复");
+});
+
 test("AppServerCodexAdapter starts and waits for thread compaction", async () => {
   const root = tempDir();
   const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
@@ -1270,8 +1306,8 @@ test("AppServerCodexAdapter starts and waits for thread compaction", async () =>
   assert.deepEqual(result, { sessionId: session.id });
   assert.equal(status.type, "idle");
   assert.ok(events.some((event) => event.type === "turn.started"));
-  assert.ok(events.some((event) => event.type === "assistant.progress" && event.text.includes("正在压缩上下文")));
-  assert.ok(events.some((event) => event.type === "assistant.progress" && event.text.includes("上下文压缩完成")));
+  assert.ok(events.some((event) => event.type === "context.compaction" && event.phase === "started"));
+  assert.ok(events.some((event) => event.type === "context.compaction" && event.phase === "completed"));
   assert.ok(events.some((event) => event.type === "turn.completed"));
 });
 

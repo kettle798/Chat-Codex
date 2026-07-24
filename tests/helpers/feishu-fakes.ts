@@ -1,6 +1,7 @@
 import type {
   FeishuApiResponse,
   FeishuCredentials,
+  FeishuCardActionTriggerEvent,
   FeishuEventDispatcher,
   FeishuEventHandlers,
   FeishuMessageReceiveEvent,
@@ -135,6 +136,10 @@ export class FakeFeishuDispatcher implements FeishuEventDispatcher {
   async emitReceive(event: FeishuMessageReceiveEvent): Promise<void> {
     await this.handlers["im.message.receive_v1"]?.(event);
   }
+
+  async emitCardAction(event: FeishuCardActionTriggerEvent): Promise<unknown> {
+    return this.handlers["card.action.trigger"]?.(event);
+  }
 }
 
 export class FakeFeishuWsClient implements FeishuWsClient {
@@ -233,6 +238,54 @@ export function sampleFeishuTextEvent(overrides: FeishuEventOverrides = {}): Fei
     message: {
       ...base.message,
       ...overrides.message,
+    },
+  };
+}
+
+type FeishuCardActionOverrides = Omit<Partial<FeishuCardActionTriggerEvent>, "context" | "operator" | "action"> & {
+  context?: Partial<NonNullable<FeishuCardActionTriggerEvent["context"]>>;
+  operator?: Partial<NonNullable<FeishuCardActionTriggerEvent["operator"]>>;
+  action?: Partial<NonNullable<FeishuCardActionTriggerEvent["action"]>>;
+};
+
+export function sampleFeishuCardActionEvent(
+  overrides: FeishuCardActionOverrides = {},
+): FeishuCardActionTriggerEvent {
+  const base: FeishuCardActionTriggerEvent = {
+    event_id: "card_ev_1",
+    event_type: "card.action.trigger",
+    app_id: "cli_1234567890abcdef",
+    context: {
+      open_message_id: "om_reply",
+      open_chat_id: "oc_direct",
+    },
+    operator: {
+      open_id: "ou_user",
+    },
+    action: {
+      tag: "button",
+      name: "chat_codex_approval",
+      value: {
+        action: "chat_codex_approval",
+        approvalKey: "a001",
+        decision: "approve",
+      },
+    },
+  };
+  return {
+    ...base,
+    ...overrides,
+    context: {
+      ...base.context,
+      ...overrides.context,
+    },
+    operator: {
+      ...base.operator,
+      ...overrides.operator,
+    },
+    action: {
+      ...base.action,
+      ...overrides.action,
     },
   };
 }

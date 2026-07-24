@@ -282,6 +282,10 @@ export class AppServerTurnController {
     const itemType = stringValue(item.type);
     const itemId = stringValue(item.id);
     if (itemId) this.flushProgressDraft(turn, sessionId, turnId, itemId);
+    if (itemType === "contextCompaction" || itemType === "context_compaction") {
+      this.pushTurnEvent(turnId, { type: "context.compaction", sessionId, turnId, phase: "completed" });
+      return;
+    }
     if (itemType === "agentMessage") {
       const text = stringValue(item.text);
       const phase = messagePhaseValue(item.phase);
@@ -357,7 +361,12 @@ export class AppServerTurnController {
     } else if (itemType === "plan") {
       this.pushProgressEvent(turn, turn.sessionId, turn.turnId, "正在规划...", "todo");
     } else if (itemType === "contextCompaction" || itemType === "context_compaction") {
-      this.pushProgressEvent(turn, turn.sessionId, turn.turnId, "正在压缩上下文...", "other");
+      this.pushTurnEvent(turn.turnId, {
+        type: "context.compaction",
+        sessionId: turn.sessionId,
+        turnId: turn.turnId,
+        phase: "started",
+      });
     } else if (itemType === "agentMessage") {
       const itemId = stringValue(item.id);
       const phase = messagePhaseValue(item.phase);

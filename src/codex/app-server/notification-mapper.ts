@@ -44,9 +44,6 @@ export function progressFromThreadItem(item: Record<string, unknown>): { text: s
     const path = stringValue(item.path) ?? stringValue(item.savedPath) ?? stringValue(item.result);
     return path ? { text: `媒体生成完成: ${path}`, kind: "file_change" } : undefined;
   }
-  if (itemType === "contextCompaction" || itemType === "context_compaction") {
-    return { text: "上下文压缩完成。", kind: "other" };
-  }
   return undefined;
 }
 

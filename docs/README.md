@@ -13,6 +13,9 @@
 - `channel-delivery-policy.zh-CN.md`
   中文渠道投递策略设计。说明 `ChannelDeliveryPolicy` 如何按渠道控制 task-start、progress、`/progress` 和 refresh 命令，避免 Bridge Core 写具体平台分支。
 
+- `weixin-plugin-2.4.6-upgrade-assessment.zh-CN.md`
+  微信插件 2.4.6 升级兼容性评估。说明本项目不直接依赖 OpenClaw 微信插件，盘点 2.4.4–2.4.6 的实际差异、当前已覆盖能力、必须适配的可中断长轮询、建议采用的服务端轮询超时，以及明确不纳入本轮的 OpenClaw 宿主和微信 progress 能力。
+
 - `inbound-media-design.zh-CN.md`
   入站图片和文件适配设计。说明微信/飞书图片如何下载保存到用户目录 `~/.chat-codex/uploads/`、图片-only 如何由 `【Chat-Codex中间件提醒】` 询问用户意图、图文消息如何投递给 Codex、执行中收到图片时如何通过结构化 steer 或 pending media 处理，以及 Codex app-server `localImage` 的结构化输入边界。
 
@@ -67,11 +70,20 @@
 - `session-context-refresh-design.zh-CN.md`
   Session 上下文外部更新检测与发送前刷新设计。说明独立模式下 Chat-Codex 如何在用户发消息前检测电脑端 Codex CLI 是否更新了同一 session，并在开关启用时重新加载后再投递消息；该方案是懒刷新，不是实时共享 app-server 模式，并要求兼容 macOS/Windows。
 
+- `context-compaction-and-refresh-reply-delivery-design.zh-CN.md`
+  上下文压缩与刷新回复投递设计。说明自动 `contextCompaction` 如何绕过普通 progress 策略投递到对应 route，以及 `/context-refresh reload` 如何在重载后通过 app-server `thread/read(includeTurns: true)` 同步最后一条最终 assistant 回复。
+
+- `runtime-event-and-cache-retention-analysis.zh-CN.md`
+  运行期事件、审批与缓存保留分析。完整盘点 Codex 事件、turn 队列、审批、`request_user_input`、渠道缓存、TUI 和 state 文件的保留边界；明确 pending approval 绝不按时间过期，terminal approval 才能清理，并记录当前需要后续收敛的队列和卡片生命周期问题。
+
 - `codex-new-version-adaptation-design.zh-CN.md`
   新版 Codex 适配设计。基于最新 `references/openai-codex` app-server schema 盘点 Chat-Codex 已实现能力、新版协议变化、短中长期适配优先级、风险和测试计划。
 
 - `codex-2026-07-latest-adaptation-design.zh-CN.md`
   Codex 2026-07 最新模型与协议适配设计。基于官方 GPT-5.6 最新模型页和 `references/openai-codex` HEAD `5c19155c`，说明模型动态元数据、开放 reasoning effort、service tier、协议漂移稳定性和后续新功能候选。
+
+- `codex-reference-81da9deb0-compatibility.zh-CN.md`
+  Codex 参考版本 `81da9deb0` 兼容性评估。以保持本地 Chat-Codex 正常运作为目标，记录当前 app-server 协议结论、远程执行环境与 `wait_for_environment` 的适配边界、已完成的协议分类和后续实际 CLI 升级门禁。
 
 - `codex-invalid-cwd-operation-not-permitted.zh-CN.md`
   Codex `invalid cwd: Operation not permitted (os error 1)` 排障与适配说明。说明 app-server 子进程 cwd、历史 session cwd、macOS 隐私权限、外置盘挂载和新版 environment/runtime workspace roots 对 Chat-Codex 的影响；记录已实现的原始错误诊断，以及后续按证据推进的 cwd 适配边界。
@@ -126,6 +138,12 @@
 
 - `feishu-adapter-design.zh-CN.md`
   飞书适配设计。说明第一阶段如何用飞书 WebSocket 长连接接入私聊文本消息，并默认投递普通文本进度。
+
+- `feishu-direct-approval-card-design.zh-CN.md`
+  飞书私聊审批卡片设计。说明通用审批卡片协议、`card.action.trigger` 回调、操作者与 route 校验、文本命令回退、模块边界和真实飞书补测要求。
+
+- `feishu-plugin-2026.7.9-upgrade-assessment.zh-CN.md`
+  飞书 OpenClaw 插件升级评估。对比 `2026.5.13` 与 `2026.7.9`，确认当前私聊 WebSocket、原生 Markdown、媒体和回复链路无需运行时代码适配，并记录群聊/thread、交互卡片、SDK 更新和飞书工具的后续边界。
 
 - `feishu-user-name-cache-design.zh-CN.md`
   飞书名称展示与群聊名册设计。说明私聊不解析名称、群聊如何按 `chat_id + open_id` 维护手工成员名册，并统一运行日志、TUI 列表和群聊发言人前缀的兜底格式。
@@ -216,12 +234,15 @@ secrets/feishu.local.md
 27. 做 app-server adapter 或 serve 入口拆分时读 `large-core-file-modularization-design.zh-CN.md`，确认原文件改名备份、薄入口、新模块边界和逐模块测试要求。
 28. 继续拆 `src/codex/app-server-codex-adapter.ts` 时读 `app-server-codex-adapter-refactor-design.zh-CN.md`，确认当前剩余职责、分阶段模块边界和 app-server targeted 测试要求。
 29. 做飞书运行日志、聊天绑定列表或群聊发言人前缀时读 `feishu-user-name-cache-design.zh-CN.md`，确认私聊 open_id 兜底、群聊手工名册和展示格式。
-30. 做 `/feishu` 飞书 skills 引导、skills 同步或后续真实飞书工具调用适配时读 `feishu-skills-command-design.zh-CN.md`。
-31. 读 `cli-interaction-redesign.zh-CN.md`，了解上一轮普通 CLI 重构背景和历史设计。
-32. 读 `development-and-test.zh-CN.md`，确认开发和测试报告要求。
-33. 读 `git-management.zh-CN.md`，确认提交边界和忽略规则。
-34. Agent 继续读 `agent-guide.zh-CN.md`，确认执行规范。
-35. 需要 Codex 协议或微信插件源码细节时，先读 `../references/README.md`，按里面的说明拉取本地参考源码。
+30. 做飞书私聊审批卡片、`card.action.trigger` 回调、按钮权限或文本回退时读 `feishu-direct-approval-card-design.zh-CN.md`。
+31. 做飞书插件版本升级、SDK 更新、卡片、thread 或群聊能力取舍时读 `feishu-plugin-2026.7.9-upgrade-assessment.zh-CN.md`，先区分独立中间件必须适配的协议变化和 OpenClaw runtime 专属能力。
+32. 做 `/feishu` 飞书 skills 引导、skills 同步或后续真实飞书工具调用适配时读 `feishu-skills-command-design.zh-CN.md`。
+33. 读 `cli-interaction-redesign.zh-CN.md`，了解上一轮普通 CLI 重构背景和历史设计。
+34. 读 `development-and-test.zh-CN.md`，确认开发和测试报告要求。
+35. 读 `git-management.zh-CN.md`，确认提交边界和忽略规则。
+36. Agent 继续读 `agent-guide.zh-CN.md`，确认执行规范。
+37. 需要 Codex 协议或微信插件源码细节时，先读 `../references/README.md`，按里面的说明拉取本地参考源码。
+38. 排查运行期内存、事件重复、审批长期等待、审批卡片失效或缓存清理时读 `runtime-event-and-cache-retention-analysis.zh-CN.md`，先区分活跃事件、pending approval、普通 user input 和可安全清理的 terminal state。
 
 ## 分阶段工作顺序
 
