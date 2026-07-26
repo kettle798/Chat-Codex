@@ -270,9 +270,19 @@ test("Feishu private approval card resolves through the shared Bridge approval f
   const cardPayload = factory.client.replyPayloads.find((payload) => payload.data.msg_type === "interactive");
   assert.ok(cardPayload, "approval should be sent as an interactive card");
   const card = JSON.parse(cardPayload.data.content) as {
-    elements: Array<{ tag?: string; actions?: Array<{ value: Record<string, unknown> }> }>;
+    elements: Array<{
+      tag?: string;
+      text?: { tag?: string; content?: string };
+      actions?: Array<{ value: Record<string, unknown> }>;
+    }>;
   };
+  const details = card.elements.find((element) => element.tag === "div")?.text;
   const actionValue = card.elements.find((element) => element.tag === "action")?.actions?.[0]?.value;
+  assert.equal(details?.tag, "plain_text");
+  assert.ok(details?.content?.includes("类型：command"));
+  assert.ok(details?.content?.includes("命令：echo mock-approval"));
+  assert.ok(details?.content?.includes(`CWD：${process.cwd()}`));
+  assert.ok(details?.content?.includes("原因：mock approval requested by prompt"));
   assert.deepEqual(actionValue, {
     action: "chat_codex_approval",
     approvalKey: "a001",

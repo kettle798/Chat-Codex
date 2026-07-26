@@ -42,6 +42,29 @@ test("Feishu approval card presents only supported decisions with stable action 
   ]);
 });
 
+test("Feishu approval card renders approval metadata as plain text", () => {
+  const card = buildFeishuApprovalCard(approvalRequest()) as {
+    elements: Array<{
+      tag?: string;
+      text?: { tag?: string; content?: string };
+    }>;
+  };
+  const details = card.elements.find((element) => element.tag === "div")?.text;
+
+  assert.deepEqual(details, {
+    tag: "plain_text",
+    content: [
+      "类型：command",
+      "会话：session-1234",
+      "Turn：turn-1234567",
+      "CWD：/workspace/project",
+      "命令：npm test",
+      "原因：运行测试",
+      "风险：low",
+    ].join("\n"),
+  });
+});
+
 test("Feishu approval action parser accepts context ids and user_id fallback", () => {
   const action = parseFeishuApprovalCardAction(sampleFeishuCardActionEvent({
     operator: { open_id: undefined, user_id: "user_123", name: "测试用户" },

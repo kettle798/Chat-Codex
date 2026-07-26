@@ -43,7 +43,7 @@ export function buildFeishuApprovalCard(request: ChannelApprovalRequest): Record
       {
         tag: "div",
         text: {
-          tag: "lark_md",
+          tag: "plain_text",
           content: approvalCardBody(request),
         },
       },
@@ -123,12 +123,8 @@ export function buildFeishuApprovalResultCard(
     elements: [{
       tag: "div",
       text: {
-        tag: "lark_md",
-        content: [
-          `**${escapeLarkText(result.text)}**`,
-          `类型：${escapeLarkText(request.kind)}`,
-          `会话：${inlineCode(shortId(request.sessionId))}`,
-        ].join("\n"),
+        tag: "plain_text",
+        content: approvalResultBody(request, result),
       },
     }],
   };
@@ -151,15 +147,26 @@ function approvalButton(approvalKey: string, decision: ChannelApprovalDecision):
 
 function approvalCardBody(request: ChannelApprovalRequest): string {
   const lines = [
-    `**类型**：${escapeLarkText(request.kind)}`,
-    `**会话**：${inlineCode(shortId(request.sessionId))}`,
-    `**Turn**：${inlineCode(shortId(request.turnId))}`,
+    requiredApprovalLine("类型", request.kind),
+    requiredApprovalLine("会话", shortId(request.sessionId)),
+    requiredApprovalLine("Turn", shortId(request.turnId)),
+    optionalApprovalLine("CWD", request.cwd),
+    optionalApprovalLine("命令", request.command),
+    optionalApprovalLine("原因", request.reason),
+    optionalApprovalLine("风险", request.risk),
   ];
-  if (request.cwd) lines.push(`**CWD**：${inlineCode(request.cwd)}`);
-  if (request.command) lines.push(`**命令**：${inlineCode(request.command)}`);
-  if (request.reason) lines.push(`**原因**：${escapeLarkText(request.reason)}`);
-  if (request.risk) lines.push(`**风险**：${escapeLarkText(request.risk)}`);
-  return lines.join("\n");
+  return lines.filter((line): line is string => Boolean(line)).join("\n");
+}
+
+function approvalResultBody(
+  request: ChannelApprovalRequest,
+  result: Extract<ChannelApprovalActionResult, { status: "resolved" }>,
+): string {
+  return [
+    normalizedPlainText(result.text) ?? "审批已处理。",
+    requiredApprovalLine("类型", request.kind),
+    requiredApprovalLine("会话", shortId(request.sessionId)),
+  ].join("\n");
 }
 
 function approvalDecisionPresentation(decision: ChannelApprovalDecision): {
@@ -214,12 +221,18 @@ function firstString(...values: Array<string | undefined>): string | undefined {
   return values.find((value) => Boolean(value?.trim()));
 }
 
-function inlineCode(value: string): string {
-  return `\`${escapeLarkText(value).replace(/`/g, "\\`")}\``;
+function requiredApprovalLine(label: string, value: string): string {
+  return `${label}：${normalizedPlainText(value) ?? "未提供"}`;
 }
 
-function escapeLarkText(value: string): string {
-  return value.replace(/[\\`*_{}\[\]<>]/g, "\\$&").replace(/\r?\n/g, " ");
+function optionalApprovalLine(label: string, value: string | undefined): string | undefined {
+  const text = normalizedPlainText(value);
+  return text ? `${label}：${text}` : undefined;
+}
+
+function normalizedPlainText(value: string | undefined): string | undefined {
+  const normalized = value?.replace(/\r?\n/g, " ").trim();
+  return normalized || undefined;
 }
 
 function shortId(value: string): string {

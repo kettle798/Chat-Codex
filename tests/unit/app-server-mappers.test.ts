@@ -97,6 +97,40 @@ test("app-server approval mapper preserves request and decision compatibility", 
   assert.equal(riskyCommand("npm test"), false);
 });
 
+test("app-server command approvals retain all fields needed by a channel card", () => {
+  const approval = approvalFromServerRequest("item/commandExecution/requestApproval", "approval-2", {
+    threadId: "019f66c4-d7ac-7251-8953-05a8b3fa629d",
+    turnId: "019f66c5-20d0-7437-bb9d-cccf142a4525",
+    itemId: "item-2",
+    startedAtMs: 1_778_716_800_000,
+    command: "id",
+    cwd: "/Volumes/MacSSD/Repositories/codex-chat-bridge",
+    reason: "验证审批流程",
+  });
+
+  assert.deepEqual(approval, {
+    kind: "command",
+    adapterApprovalId: "approval-2",
+    sessionId: "019f66c4-d7ac-7251-8953-05a8b3fa629d",
+    turnId: "019f66c5-20d0-7437-bb9d-cccf142a4525",
+    itemId: "item-2",
+    command: "id",
+    cwd: "/Volumes/MacSSD/Repositories/codex-chat-bridge",
+    reason: "验证审批流程",
+    risk: undefined,
+    availableDecisions: ["approve", "approve-session", "deny", "cancel"],
+    raw: {
+      threadId: "019f66c4-d7ac-7251-8953-05a8b3fa629d",
+      turnId: "019f66c5-20d0-7437-bb9d-cccf142a4525",
+      itemId: "item-2",
+      startedAtMs: 1_778_716_800_000,
+      command: "id",
+      cwd: "/Volumes/MacSSD/Repositories/codex-chat-bridge",
+      reason: "验证审批流程",
+    },
+  });
+});
+
 test("app-server unsupported server request mapper fails closed with visible notices", () => {
   assert.deepEqual(contextFromServerRequestParams({
     threadId: "thread-1",
