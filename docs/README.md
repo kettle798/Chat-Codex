@@ -13,6 +13,9 @@
 - `channel-delivery-policy.zh-CN.md`
   中文渠道投递策略设计。说明 `ChannelDeliveryPolicy` 如何按渠道控制 task-start、progress、`/progress` 和 refresh 命令，避免 Bridge Core 写具体平台分支。
 
+- `scheduled-task-channel-delivery-design.zh-CN.md`
+  定时任务与精准渠道投递设计草案。区分 Codex App 原生 Scheduled tasks 与 app-server 边界，设计以动态工具触发、Chat-Codex 中间件持久化、route/session 精确绑定的多渠道定时任务；覆盖一次性/周期规则、task session 隔离、run-scoped 审批/输入路由、前台并发优先、`/timer` 编号详情、TUI 管理、重启恢复、精准投递，以及“调度核心 -> Codex 适配 -> 渠道 -> 命令/TUI”的完整开发计划。
+
 - `weixin-plugin-2.4.6-upgrade-assessment.zh-CN.md`
   微信插件 2.4.6 升级兼容性评估。说明本项目不直接依赖 OpenClaw 微信插件，盘点 2.4.4–2.4.6 的实际差异、当前已覆盖能力、必须适配的可中断长轮询、建议采用的服务端轮询超时，以及明确不纳入本轮的 OpenClaw 宿主和微信 progress 能力。
 
