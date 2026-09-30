@@ -18,6 +18,7 @@ import type {
   CodexSessionReloadResult,
   CodexSessionStatus,
   CodexSessionSummary,
+  CodexTransportDiagnostic,
   CodexRunOptions,
   StartSessionInput,
   CodexPromptInput,
@@ -40,7 +41,7 @@ import { appServerUserInput } from "./app-server/input-mapper.js";
 import { appServerErrorMessage, isTransientAppServerError } from "./app-server/notification-mapper.js";
 import { unsupportedServerRequestResponse, userInputRequestFromServerRequest } from "./app-server/server-request-mapper.js";
 import { mergeSessionSummaries, sessionDetailFromThread, sessionSummaryFromThread } from "./app-server/thread-list.js";
-import { readLastAssistantMessageFromHistory } from "./app-server/thread-history.js";
+import { readLastAssistantMessageFromPages } from "./app-server/thread-history.js";
 import {
   cloneModelPolicy,
   modelInfoFromResponse,
@@ -99,7 +100,10 @@ export class AppServerCodexAdapter implements CodexAdapter {
   private readonly pendingUserInputs = new Map<string, PendingServerUserInput>();
   private readonly compactWaiters = new Map<string, CompactWaiter>();
   private readonly cwdDiagnostics = new Map<string, CodexCwdDiagnostic>();
+  private readonly loadedSessionIds = new Set<string>();
+  private readonly sessionResumePromises = new Map<string, Promise<CodexSession>>();
   private lastCwdDiagnostic?: CodexCwdDiagnostic;
+  private lastTransportDiagnostic?: CodexTransportDiagnostic;
   private readonly turns = new AppServerTurnController({
     sessions: this.sessionStore.records,
     threadToSession: this.sessionStore.threadToSession,
@@ -117,7 +121,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
       requestTimeoutMs: this.requestTimeoutMs,
       onServerRequest: (request) => this.handleServerRequest(request),
       onNotification: (notification) => this.handleNotification(notification),
-      onFatalError: (error) => this.handleFatalAppServerError(error),
+      onFatalError: (error, diagnostic) => this.handleFatalAppServerError(error, diagnostic),
     });
   }
 
@@ -129,6 +133,8 @@ export class AppServerCodexAdapter implements CodexAdapter {
     this.turns.closeAll();
     this.pendingApprovals.clear();
     this.pendingUserInputs.clear();
+    this.loadedSessionIds.clear();
+    this.sessionResumePromises.clear();
     for (const waiter of this.compactWaiters.values()) {
       if (waiter.timer) clearTimeout(waiter.timer);
       waiter.reject(new Error("codex app-server stopped"));
@@ -174,20 +180,26 @@ export class AppServerCodexAdapter implements CodexAdapter {
       this.sessionCollaborationModes.set(session.id, this.defaultCollaborationMode);
     }
     this.sessionStore.mapThread(threadId, session.id);
+    this.loadedSessionIds.add(session.id);
     return session;
   }
 
   async resumeSession(sessionId: string): Promise<CodexSession> {
-    await this.ensureStarted();
-    return this.loadSessionFromServer(sessionId, false);
+    if (this.sessionStore.has(sessionId)) {
+      await this.ensureSessionLoaded(sessionId);
+      const stored = this.sessionStore.get(sessionId);
+      if (!stored) throw new Error(`app-server session not found locally: ${sessionId}`);
+      return stored.session;
+    }
+    return this.loadSessionFromServer(sessionId, true);
   }
 
   async reloadSession(sessionId: string): Promise<CodexSessionReloadResult> {
     const routeKey = this.sessionStore.get(sessionId)?.routeKey;
     this.restartAppServerForReload();
     const session = await this.loadSessionFromServer(sessionId, true, routeKey);
-    const lastAssistantMessage = await readLastAssistantMessageFromHistory(
-      (params) => this.request<Record<string, unknown>>("thread/read", params),
+    const lastAssistantMessage = await readLastAssistantMessageFromPages(
+      (method, params) => this.request<Record<string, unknown>>(method, params),
       sessionId,
     );
     return {
@@ -209,19 +221,22 @@ export class AppServerCodexAdapter implements CodexAdapter {
     }
     this.compactWaiters.clear();
     this.turns.closeAll();
+    this.loadedSessionIds.clear();
+    this.sessionResumePromises.clear();
     this.sessionStore.clear();
     this.rpc.stop();
   }
 
-  private async loadSessionFromServer(sessionId: string, forceReload: boolean, routeKey?: string): Promise<CodexSession> {
-    const stored = this.sessionStore.get(sessionId);
-    if (stored && !forceReload) return stored.session;
+  private async loadSessionFromServer(sessionId: string, forceResume: boolean, routeKey?: string): Promise<CodexSession> {
     await this.ensureStarted();
+    const stored = this.sessionStore.get(sessionId);
+    if (stored && !forceResume && this.loadedSessionIds.has(sessionId)) return stored.session;
     const discovered = findCodexSessionById(sessionId, { codexHome: this.codexHome });
     const modelPolicy = cloneModelPolicy(this.sessionModelPolicies.get(sessionId) ?? this.defaultModelPolicy);
     const runPolicy = this.runPolicyForSession(sessionId);
     const response = await this.request<Record<string, unknown>>("thread/resume", {
       threadId: sessionId,
+      excludeTurns: true,
       model: modelPolicy.model,
       serviceTier: modelPolicy.serviceTier,
       cwd: discovered?.cwd ?? undefined,
@@ -256,12 +271,12 @@ export class AppServerCodexAdapter implements CodexAdapter {
       this.sessionCollaborationModes.set(session.id, this.defaultCollaborationMode);
     }
     this.sessionStore.mapThread(sessionId, session.id);
+    this.loadedSessionIds.add(session.id);
     return session;
   }
 
   async setSessionTitle(sessionId: string, title: string): Promise<void> {
-    await this.ensureStarted();
-    this.ensureKnownSession(sessionId);
+    await this.ensureSessionLoaded(sessionId);
     await this.request<Record<string, unknown>>("thread/name/set", {
       threadId: sessionId,
       name: title,
@@ -281,9 +296,9 @@ export class AppServerCodexAdapter implements CodexAdapter {
   }
 
   async *run(sessionId: string, prompt: CodexPromptInput, options: CodexRunOptions = {}): AsyncIterable<CodexEvent> {
+    await this.ensureSessionLoaded(sessionId);
     const stored = this.sessionStore.get(sessionId);
     if (!stored) throw new Error(`app-server session not found locally: ${sessionId}`);
-    await this.ensureStarted();
     const runPolicy = this.runPolicyForSession(sessionId);
     const modelPolicy = this.modelPolicyForSession(sessionId);
     const collaborationMode = options.collaborationMode ?? this.sessionCollaborationModes.get(sessionId);
@@ -324,11 +339,13 @@ export class AppServerCodexAdapter implements CodexAdapter {
   }
 
   async steer(sessionId: string, prompt: CodexPromptInput): Promise<void> {
-    const stored = this.sessionStore.get(sessionId);
+    let stored = this.sessionStore.get(sessionId);
     if (!stored) throw new Error(`app-server session not found locally: ${sessionId}`);
-    await this.ensureStarted();
     const turnId = stored.currentTurnId;
     if (!turnId) throw new Error("no active turn to steer");
+    await this.ensureSessionLoaded(sessionId);
+    stored = this.sessionStore.get(sessionId);
+    if (!stored?.currentTurnId) throw new Error("no active turn to steer");
     const response = await this.request<Record<string, unknown>>("turn/steer", {
       threadId: sessionId,
       input: appServerUserInput(prompt),
@@ -377,6 +394,10 @@ export class AppServerCodexAdapter implements CodexAdapter {
     return sessionId ? this.cwdDiagnostics.get(sessionId) : this.lastCwdDiagnostic;
   }
 
+  getTransportDiagnostic(): CodexTransportDiagnostic | undefined {
+    return this.lastTransportDiagnostic;
+  }
+
   async listSessions(routeKey?: string): Promise<CodexSessionSummary[]> {
     if (routeKey) return this.sessionStore.listSessions(routeKey, this.codexHome);
     const runtimeSessions = this.sessionStore.listRuntimeSessions();
@@ -386,7 +407,11 @@ export class AppServerCodexAdapter implements CodexAdapter {
   }
 
   async getSessionDetail(sessionId: string): Promise<CodexSessionDetail | undefined> {
-    await this.ensureStarted();
+    if (this.sessionStore.has(sessionId)) {
+      await this.ensureSessionLoaded(sessionId);
+    } else {
+      await this.ensureStarted();
+    }
     const response = await this.request<Record<string, unknown>>("thread/read", {
       threadId: sessionId,
       includeTurns: false,
@@ -509,8 +534,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
   }
 
   async getGoal(sessionId: string): Promise<CodexGoal | null> {
-    await this.ensureStarted();
-    this.ensureKnownSession(sessionId);
+    await this.ensureSessionLoaded(sessionId);
     const response = await this.request<Record<string, unknown>>("thread/goal/get", {
       threadId: sessionId,
     });
@@ -519,8 +543,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
   }
 
   async setGoal(sessionId: string, objective: string): Promise<CodexGoal> {
-    await this.ensureStarted();
-    this.ensureKnownSession(sessionId);
+    await this.ensureSessionLoaded(sessionId);
     const response = await this.request<Record<string, unknown>>("thread/goal/set", {
       threadId: sessionId,
       objective,
@@ -530,8 +553,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
   }
 
   async setGoalStatus(sessionId: string, status: CodexGoalStatus): Promise<CodexGoal> {
-    await this.ensureStarted();
-    this.ensureKnownSession(sessionId);
+    await this.ensureSessionLoaded(sessionId);
     const response = await this.request<Record<string, unknown>>("thread/goal/set", {
       threadId: sessionId,
       status,
@@ -540,8 +562,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
   }
 
   async clearGoal(sessionId: string): Promise<boolean> {
-    await this.ensureStarted();
-    this.ensureKnownSession(sessionId);
+    await this.ensureSessionLoaded(sessionId);
     const response = await this.request<Record<string, unknown>>("thread/goal/clear", {
       threadId: sessionId,
     });
@@ -549,7 +570,7 @@ export class AppServerCodexAdapter implements CodexAdapter {
   }
 
   async compactSession(sessionId: string): Promise<CodexCompactResult> {
-    await this.ensureStarted();
+    await this.ensureSessionLoaded(sessionId);
     const stored = this.sessionStore.get(sessionId);
     if (!stored) throw new Error(`app-server session not found locally: ${sessionId}`);
     if (this.compactWaiters.has(sessionId)) throw new Error("当前 session 正在压缩上下文。");
@@ -592,6 +613,27 @@ export class AppServerCodexAdapter implements CodexAdapter {
 
   private ensureKnownSession(sessionId: string): void {
     if (!this.sessionStore.has(sessionId)) throw new Error(`app-server session not found locally: ${sessionId}`);
+  }
+
+  private async ensureSessionLoaded(sessionId: string): Promise<void> {
+    this.ensureKnownSession(sessionId);
+    await this.ensureStarted();
+    if (this.loadedSessionIds.has(sessionId)) return;
+    const existing = this.sessionResumePromises.get(sessionId);
+    if (existing) {
+      await existing;
+      return;
+    }
+    const routeKey = this.sessionStore.get(sessionId)?.routeKey;
+    const resume = this.loadSessionFromServer(sessionId, true, routeKey);
+    this.sessionResumePromises.set(sessionId, resume);
+    try {
+      await resume;
+    } finally {
+      if (this.sessionResumePromises.get(sessionId) === resume) {
+        this.sessionResumePromises.delete(sessionId);
+      }
+    }
   }
 
   private ensureStarted(): Promise<void> {
@@ -1056,8 +1098,12 @@ export class AppServerCodexAdapter implements CodexAdapter {
     this.turns.pushTurnEvent(turnId, { type: "input.requested", sessionId: resolvedSessionId, turnId, request: inputRequest });
   }
 
-  private handleFatalAppServerError(error: Error): void {
+  private handleFatalAppServerError(error: Error, diagnostic: CodexTransportDiagnostic): void {
+    this.lastTransportDiagnostic = diagnostic;
+    this.pendingApprovals.clear();
     this.pendingUserInputs.clear();
+    this.loadedSessionIds.clear();
+    this.sessionResumePromises.clear();
     for (const waiter of this.compactWaiters.values()) {
       if (waiter.timer) clearTimeout(waiter.timer);
       waiter.reject(error);

@@ -87,13 +87,15 @@ Chat-Codex 已经能处理 Codex app-server 的 `contextCompaction` item，也�
 
 ### app-server 读取规则
 
-`AppServerCodexAdapter.reloadSession()` 在成功 `thread/resume` 后调用官方 app-server 请求：
+`AppServerCodexAdapter.reloadSession()` 使用 metadata-only 的恢复和有界分页读取：
 
 ```text
-thread/read { threadId, includeTurns: true }
+thread/resume { threadId, excludeTurns: true }
+thread/turns/list { threadId, cursor, limit: 4, sortDirection: "desc", itemsView: "notLoaded" }
+thread/items/list { threadId, turnId, cursor, limit: 16, sortDirection: "desc" }
 ```
 
-从 `thread.turns` 倒序遍历 `items`，取第一条：
+从最新的 turn/item 页倒序遍历，取第一条：
 
 - `type === "agentMessage"`
 - `text` 非空
@@ -112,17 +114,22 @@ Session: <id>
 <最后一条最终 assistant 回复>
 ```
 
-若历史读取失败、app-server 较旧不支持该读取、或历史中没有最终回复，reload 仍然成功，只发送既有刷新提示。历史回读是增强项，不能阻断用户的新消息。
+如果分页 API 不可用、或历史中没有最终回复，reload 仍然成功，只发送既有刷新提示。历史回读是增强项，不能阻断用户的新消息。
+分页读取遇到损坏 JSON-RPC 帧等 transport fatal error 时，reload 必须失败并走正常错误处理，不能把未完成的恢复伪装成成功。
 
 ### adapter 兼容性
 
 `CodexSessionReloadResult.lastAssistantMessage` 是可选字段。
 
-- 默认 `AppServerCodexAdapter` 通过官方 `thread/read(includeTurns: true)` 支持恢复。
+- 默认 `AppServerCodexAdapter` 通过 `excludeTurns: true` 和有界分页支持恢复，最多读取 2 个 turn 页、每页 4 个
+  turn；每个候选 turn 最多读取 2 个 item 页、每页 16 个 item。
 - 不提供该字段的 adapter 保留原来的 reload 行为和提示，不伪造回复。
 - 这避免 legacy exec adapter 对 Codex rollout JSONL 内部格式形成不稳定耦合；若未来需要 parity，应单独为 JSONL 解析建立版本化测试。
 
-`thread/read` 在协议能力清单中从候选项调整为 adapter 已处理项，因为项目已用它读取 session detail 和刷新后的最终回复。
+`thread/read` 仍在协议能力清单中作为 adapter 已处理项，但只用于 `includeTurns: false` 的 session detail；刷新链路不再读取完整历史。
+
+为避免重新引入超大 stdout JSON-RPC 响应，Chat-Codex 不会在旧 server 不支持 `excludeTurns` 时自动回退完整 history。
+这类 app-server 应升级；分页 API 缺失则只影响最后回复的补投，不影响同一 session 的恢复和后续任务。
 
 ## 渠道与日志语义
 
@@ -145,7 +152,8 @@ Session: <id>
 ## 测试要点
 
 1. app-server history mapper 从倒序 turns/items 选择最后一条最终回复，并跳过 commentary。
-2. fake app-server 验证 `reloadSession()` 真实调用 `thread/read(includeTurns: true)` 并返回回复。
+2. fake app-server 验证 `reloadSession()` 真实调用 `thread/resume(excludeTurns: true)`、`thread/turns/list` 和
+   `thread/items/list`，并返回最终回复。
 3. `SessionContextRefreshManager` 保留该可选回复。
 4. route queue 在下一条 prompt 前发送刷新文本和回复。
 5. `context.compaction` 在 progress 被抑制时仍投递。

@@ -5,6 +5,11 @@ mock 自动化测试已完成。其余业务适配仍按本计划逐项讨论，
 
 更新：2026-09-05
 
+> 2026-09-30 实施更新：分页历史读取、`thread/resume({ excludeTurns: true })`、app-server 损坏 JSON 的
+> fatal recovery 和失败 turn 的精确审批/input 清理已经完成。本文后续关于“legacy full-history fallback”的计划性描述
+> 已被 `2026-09-30-codex-app-server-json-rpc-large-payload-analysis.zh-CN.md` 取代；实际实现不回退无上限
+> `thread/read(includeTurns: true)`，以避免重新触发超大 JSON-RPC 帧风险。
+
 ## 1. 背景
 
 Chat-Codex 是把本机 Codex 接入微信和飞书的聊天中间件。Codex CLI、app-server 协议、
@@ -209,9 +214,9 @@ Chat-Codex 的模型发现路径总体是面向未来的：模型名和 reasonin
 | 能力 | 当前实现与入口 | 已有兼容性判断 | 本轮结论 |
 | --- | --- | --- | --- |
 | 模型发现与选择 | `src/codex/app-server/model-policy.ts`、`src/bridge/commands/model-command.ts` | 从 `model/list` 读取可用模型、effort、tier、模态和升级信息；effort 接受合法未来字符串 | 基础路径已兼容，应补 thread 返回值和可展示元数据 |
-| 新建/恢复会话 | `src/codex/app-server-codex-adapter.ts` | 使用 `thread/start`、`thread/resume`，带模型、持久 tier、cwd、审批、sandbox 等策略 | 恢复时应迁移为按需分页读取历史，并兼容旧 server |
+| 新建/恢复会话 | `src/codex/app-server-codex-adapter.ts` | 使用 `thread/start`、`thread/resume`，带模型、持久 tier、cwd、审批、sandbox 等策略；恢复使用 `excludeTurns: true` | 已迁移到 metadata-only resume；不支持该字段的 app-server 需要升级，避免 full-history 风险 |
 | 对话和中断 | adapter 的 `turn/start`、steer、interrupt；`src/codex/app-server/turn-controller.ts` | 可投递输入、旁白、进度、最终回复并处理运行状态 | 需要正确处理 async agent message、misalignment 和新字段 |
-| 会话刷新和最后回复 | `src/codex/app-server/thread-history.ts` | 目前用 `thread/read(includeTurns: true)` 取得最后最终回复 | 官方已将完整历史路径标为过时，应改为 pagination 优先、旧版 fallback |
+| 会话刷新和最后回复 | `src/codex/app-server/thread-history.ts` | 通过有界 `thread/turns/list` / `thread/items/list` 取得最后最终回复 | 已迁移；分页 API 不可用时跳过补投，不读取完整历史 |
 | 审批 | `src/codex/app-server/approval-handler.ts`、`src/approvals/types.ts` | 已支持命令、文件、权限等审批并回传决策 | 新版 `writeStdin` 必须与新命令审批区分；决策集合不能再硬编码 |
 | `request_user_input` | `src/bridge/pending-input.ts`、`/a数字` 命令 | 已有题目、选项、发起者校验、30 分钟超时和 secret 拒绝 | 必须理解 `isBlocking`，不能把非阻塞问题误锁成阻塞输入 |
 | 服务器通知 | adapter 内 notification handler 与 Bridge delivery | 已处理状态、标题、模型 reroute/verification、安全缓冲、warning 等 | 新增 11 类须分类，少数需显式提示或状态失效 |
@@ -239,10 +244,9 @@ Chat-Codex 的模型发现路径总体是面向未来的：模型名和 reasonin
 | `plugin/reconcile` | plugin 生命周期协调 | 不开放 | 当前没有插件安装、信任、授权和渠道交互闭环 |
 
 新版源码还将 `thread/read(includeTurns: true)` 定义为兼容路径，并明确建议分页客户端使用
-`thread/turns/list` 和 `thread/items/list`。恢复策略应是：先以
-`thread/resume({ excludeTurns: true })` 复原配置，再按需读最新一页；如果旧 app-server 不识别
-`excludeTurns` 或新分页方法，再重试旧参数并回退 `thread/read(includeTurns: true)`。不能为了
-兼容而在每次刷新时无上限拉取整个会话。
+`thread/turns/list` 和 `thread/items/list`。当前实现先以 `thread/resume({ excludeTurns: true })` 复原配置，
+再按需读受限的最新分页；分页方法不支持时保留恢复、跳过最后回复补投。不会为旧 server 回退到
+`thread/read(includeTurns: true)`，因为那会重新引入无上限大帧风险。
 
 ### 12.2 ServerRequest：方法名未变，但参数语义必须修正
 
@@ -339,10 +343,10 @@ service tier、输入模态和升级信息也都来自 `model/list`。这正是�
   `thread/reverted` 的路由/缓存失效逻辑；认证恢复通知仅做安全分类/本地诊断，不增加登录能力。
 - 在 `src/codex/app-server/model-policy.ts`、thread/session mapper 补 model 与 effort 的 fallback。
 
-### 阶段 B：保留已有的上下文刷新
+### 阶段 B：保留已有的上下文刷新（已完成）
 
-- 将 `src/codex/app-server/thread-history.ts` 的完整历史读取替换为分页优先、旧 server fallback；
-  限制每次刷新读取范围。
+- `src/codex/app-server/thread-history.ts` 已改为有界分页读取；分页不支持时跳过补投，
+  不回退完整历史。
 
 ### 可选后续：新版交互与展示体验
 
@@ -368,7 +372,7 @@ transcript、native thread queue、multi-agent、`serviceTierForTurn` 或 `turnT
 | blocking / non-blocking 输入 | `isBlocking: true` 保持现有 `/a数字` 语义；`false` 不会无依据锁死 route 或自动替用户答题 |
 | 严格审查、回退通知 | 通知只影响对应 thread/route；严格审查不凭空生成审批；回退后不会拿旧历史当最新状态 |
 | 认证恢复通知 | 仅被明确分类/本地诊断；不会新增聊天登录、token 刷新或账号管理功能 |
-| 分页历史 | 新 server 使用 `excludeTurns` 和分页读到最后最终回复；旧 server 会可靠退回现有 `thread/read` 路径 |
+| 分页历史 | 使用 `excludeTurns` 和有界分页读到最后最终回复；分页 API 不可用时不补投，绝不退回完整 `thread/read` |
 | async agent message | turn 未结束时消息立即投递，后续最终回复不覆盖它，也不会提前完成 turn |
 | misalignment | 用户能看到详细说明；系统不会自动发送建议 steer |
 | 新模型元数据 | 模拟未知新模型/effort、thread model fallback、specialty 和退役时间；不需要修改固定模型 ID 列表 |
@@ -462,13 +466,12 @@ Codex 上下文，不需要每次重新读取完整历史。
 - 使用上下文刷新功能，发现电脑上的 Codex CLI 改过同一个会话；
 - 需要找出该会话最新一条最终回复并同步给聊天端。
 
-目前的做法是一次向 Codex 要整个会话的所有 turn 和消息。会话短时没有问题；会话很长时，读取会
-越来越慢、越来越占内存。新版 Codex 源码已经把这种“整本聊天记录一次读完”的方式标为兼容旧
-客户端的路径，推荐按页读取，例如只读最新一页，再取最后一条最终回答。
+现在的做法是 metadata-only resume 后只读取受限的最新 turn/item 页。会话再长也不会由 Chat-Codex
+主动一次请求全部历史；新版 Codex 源码同样推荐按页读取，例如只读最新一页，再取最后一条最终回答。
 
 因此这项适配不是要改变你在微信/飞书里看见的聊天记录，也不是要清掉历史；它是为了保证长会话恢复、
-刷新和同步时仍然快速、可靠，并可同时兼容旧 Codex。也就是说：**要适配，但只是在保留当前刷新
-功能的前提下，替换它内部过时的“整段历史读取”方式；不是另做一个上下文功能。**
+刷新和同步时仍然快速、可靠。也就是说：**这项适配已经在保留当前刷新功能的前提下完成，替换的只是
+内部过时的“整段历史读取”方式；不是另做一个上下文功能。**
 
 ### 17.5 可选新体验：“异步消息”是什么
 

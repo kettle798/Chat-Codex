@@ -203,6 +203,25 @@ export class BridgePendingInputManager {
     return cleared;
   }
 
+  clearTurn(routeKey: string, sessionId: string, turnId: string): number {
+    let cleared = 0;
+    const pending = this.pendingByRoute.get(routeKey);
+    if (pending && pending.request.sessionId === sessionId && pending.request.turnId === turnId) {
+      this.clearPending(pending);
+      cleared += 1;
+    }
+    const queued = this.queuedByRoute.get(routeKey);
+    if (!queued) return cleared;
+    const remaining = queued.filter((item) => item.request.sessionId !== sessionId || item.request.turnId !== turnId);
+    cleared += queued.length - remaining.length;
+    if (remaining.length === 0) {
+      this.queuedByRoute.delete(routeKey);
+    } else if (remaining.length !== queued.length) {
+      this.queuedByRoute.set(routeKey, remaining);
+    }
+    return cleared;
+  }
+
   clearAll(): void {
     for (const pending of this.pendingByRoute.values()) {
       if (pending.timer) clearTimeout(pending.timer);

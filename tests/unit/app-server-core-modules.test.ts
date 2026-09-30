@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CodexEvent } from "../../src/codex/types.js";
@@ -190,6 +190,8 @@ for await (const line of rl) {
     console.log(JSON.stringify({ id: message.id, result: { ok: true } }));
   } else if (message.method === "model/list") {
     console.log(JSON.stringify({ id: message.id, result: { data: [{ id: "fake" }], nextCursor: null } }));
+  } else if (message.method === "large") {
+    console.log(JSON.stringify({ id: message.id, result: { payload: "x".repeat(25_000_000) } }));
   } else if (message.method === "emit") {
     console.log(JSON.stringify({ method: "turn/started", params: { threadId: "thread-1", turnId: "turn-1" } }));
     console.log(JSON.stringify({ id: message.id, result: { emitted: true } }));
@@ -200,7 +202,7 @@ for await (const line of rl) {
   const notifications: unknown[] = [];
   const client = new AppServerRpcClient({
     codexBin: bin,
-    requestTimeoutMs: 1000,
+    requestTimeoutMs: 5000,
     onServerRequest: () => undefined,
     onNotification: (notification) => notifications.push(notification),
     onFatalError: () => undefined,
@@ -208,6 +210,8 @@ for await (const line of rl) {
   try {
     await client.start();
     assert.deepEqual(await client.request("model/list"), { data: [{ id: "fake" }], nextCursor: null });
+    const large = await client.request<{ payload: string }>("large");
+    assert.equal(large.payload.length, 25_000_000);
     assert.deepEqual(await client.request("emit"), { emitted: true });
     assert.deepEqual(notifications, [{ method: "turn/started", params: { threadId: "thread-1", turnId: "turn-1" } }]);
     client.stop();
@@ -218,3 +222,66 @@ for await (const line of rl) {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("app-server rpc client discards malformed JSON transport and starts a fresh process without replaying requests", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "chat-codex-rpc-malformed-"));
+  const bin = join(dir, "fake-codex.mjs");
+  const starts = join(dir, "starts.log");
+  const requests = join(dir, "requests.log");
+  await writeFile(bin, `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+appendFileSync(${JSON.stringify(starts)}, process.pid + "\\n");
+const rl = createInterface({ input: process.stdin });
+for await (const line of rl) {
+  const message = JSON.parse(line);
+  appendFileSync(${JSON.stringify(requests)}, message.method + "\\n");
+  if (message.method === "initialize") {
+    console.log(JSON.stringify({ id: message.id, result: { ok: true } }));
+  } else if (message.method === "break") {
+    process.stdout.write('{"id":' + JSON.stringify(message.id) + ',"result":{"payload":"unterminated\\n');
+  } else if (message.method === "ok") {
+    console.log(JSON.stringify({ id: message.id, result: { ok: true } }));
+  }
+}
+`);
+  await chmod(bin, 0o755);
+  const fatalDiagnostics: Array<{ error: Error; stdoutLineLength?: number }> = [];
+  const client = new AppServerRpcClient({
+    codexBin: bin,
+    requestTimeoutMs: 5000,
+    onServerRequest: () => undefined,
+    onNotification: () => undefined,
+    onFatalError: (error, diagnostic) => {
+      fatalDiagnostics.push({ error, stdoutLineLength: diagnostic.stdoutLineLength });
+    },
+  });
+  try {
+    await client.start();
+    await assert.rejects(client.request("break"), /Unterminated string/);
+    await waitFor(() => fatalDiagnostics.length === 1);
+    assert.equal(fatalDiagnostics.length, 1);
+    assert.ok((fatalDiagnostics[0]?.stdoutLineLength ?? 0) > 0);
+    assert.match(client.getLastTransportDiagnostic()?.error ?? "", /Unterminated string/);
+
+    await client.start();
+    assert.deepEqual(await client.request("ok"), { ok: true });
+
+    assert.equal((await readFile(starts, "utf8")).trim().split(/\r?\n/).length, 2);
+    const requestLines = (await readFile(requests, "utf8")).trim().split(/\r?\n/);
+    assert.equal(requestLines.filter((method) => method === "break").length, 1);
+    assert.equal(requestLines.filter((method) => method === "ok").length, 1);
+  } finally {
+    client.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail("condition not met before timeout");
+}

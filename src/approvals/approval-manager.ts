@@ -74,9 +74,21 @@ export class ApprovalManager {
 
   cancelRoute(routeKey: string, reason?: string): PendingApproval[] {
     this.expireOld();
+    return this.cancelPending((pending) => pending.routeKey === routeKey, reason);
+  }
+
+  cancelTurn(routeKey: string, sessionId: string, turnId: string, reason?: string): PendingApproval[] {
+    this.expireOld();
+    return this.cancelPending(
+      (pending) => pending.routeKey === routeKey && pending.sessionId === sessionId && pending.turnId === turnId,
+      reason,
+    );
+  }
+
+  private cancelPending(predicate: (pending: PendingApproval) => boolean, reason?: string): PendingApproval[] {
     const cancelled: PendingApproval[] = [];
     for (const pending of this.approvals.values()) {
-      if (pending.routeKey !== routeKey || pending.status !== "pending") continue;
+      if (!predicate(pending) || pending.status !== "pending") continue;
       pending.status = "resolved";
       pending.decision = "cancel";
       pending.decisionReason = reason?.trim() || undefined;

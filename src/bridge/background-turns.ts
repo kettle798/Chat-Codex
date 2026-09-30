@@ -1,6 +1,6 @@
 import type { ApprovalManager } from "../approvals/approval-manager.js";
 import { randomUUID } from "node:crypto";
-import type { CodexEvent, CodexProgressKind, CodexSessionStatus } from "../codex/types.js";
+import type { CodexEvent, CodexProgressKind, CodexSessionStatus, CodexTransportDiagnostic } from "../codex/types.js";
 import type { Logger } from "../logging/logger.js";
 import type { TranscriptSink } from "../logging/transcript.js";
 import type { ChannelMessage, ChannelTarget } from "../protocol/channel.js";
@@ -37,6 +37,7 @@ export interface BridgeBackgroundTurnsOptions {
   commentaryDelivery?: BridgeCommentaryDelivery;
   notificationDelivery?: BridgeNotificationDelivery;
   pendingInput?: BridgePendingInputManager;
+  transportDiagnostic?(): CodexTransportDiagnostic | undefined;
   startRouteWorker(routeKey: string): void;
   routeQueueLength(routeKey: string): number;
   hasRouteWorker(routeKey: string): boolean;
@@ -57,6 +58,7 @@ export class BridgeBackgroundTurns {
   private readonly shouldDeliverContextCompaction: NonNullable<BridgeBackgroundTurnsOptions["shouldDeliverContextCompaction"]>;
   private readonly notificationDelivery: BridgeNotificationDelivery;
   private readonly pendingInput?: BridgePendingInputManager;
+  private readonly transportDiagnostic?: BridgeBackgroundTurnsOptions["transportDiagnostic"];
   private readonly startRouteWorker: BridgeBackgroundTurnsOptions["startRouteWorker"];
   private readonly routeQueueLength: BridgeBackgroundTurnsOptions["routeQueueLength"];
   private readonly hasRouteWorker: BridgeBackgroundTurnsOptions["hasRouteWorker"];
@@ -89,6 +91,7 @@ export class BridgeBackgroundTurns {
       delivery: this.delivery,
     });
     this.pendingInput = options.pendingInput;
+    this.transportDiagnostic = options.transportDiagnostic;
     this.startRouteWorker = options.startRouteWorker;
     this.routeQueueLength = options.routeQueueLength;
     this.hasRouteWorker = options.hasRouteWorker;
@@ -206,6 +209,14 @@ export class BridgeBackgroundTurns {
       }
       await this.finishTurn(event.turnId, state);
     } else if (event.type === "turn.failed") {
+      this.approvals.cancelTurn(
+        state.routeKey,
+        event.sessionId,
+        event.turnId,
+        "Codex 当前任务已失败，审批不可再处理。",
+      );
+      this.pendingInput?.clearTurn(state.routeKey, event.sessionId, event.turnId);
+      this.logTransportDiagnostic(event.error);
       this.state.setSessionStatus(event.sessionId, { type: "failed", error: event.error });
       await this.progressDelivery.flushRoute(state.routeKey);
       await this.commentaryDelivery.flushRoute(state.routeKey);
@@ -261,6 +272,23 @@ export class BridgeBackgroundTurns {
     if (this.routeQueueLength(state.routeKey) > 0 && !this.hasRouteWorker(state.routeKey)) {
       this.startRouteWorker(state.routeKey);
     }
+  }
+
+  private logTransportDiagnostic(error: string): void {
+    const diagnostic = this.transportDiagnostic?.();
+    if (!diagnostic || diagnostic.error !== error) return;
+    this.logger.error("codex app-server transport diagnostic", {
+      kind: diagnostic.kind,
+      observedAt: diagnostic.observedAt,
+      processId: diagnostic.processId,
+      stdoutLineLength: diagnostic.stdoutLineLength,
+      exitCode: diagnostic.exitCode,
+      signal: diagnostic.signal,
+      pendingRequests: diagnostic.pendingRequests.map((request) => request.method),
+      recentRequests: diagnostic.recentRequests.map((request) => request.method),
+      stderrTail: diagnostic.stderrTail,
+      error: diagnostic.error,
+    });
   }
 
   private startTypingKeepalive(state: BackgroundTurnState): void {

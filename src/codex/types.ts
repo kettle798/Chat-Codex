@@ -2,10 +2,12 @@ import type { ApprovalDecision, ApprovalRequest } from "../approvals/types.js";
 import type { CodexRunPolicy, CodexRunPolicyStatus } from "./codex-cli.js";
 import type { CodexCwdDiagnostic } from "./cwd-diagnostic.js";
 import type { CodexPromptInput } from "./input.js";
+import type { CodexTransportDiagnostic } from "./transport-diagnostic.js";
 
 export type { CodexRunPolicy, CodexRunPolicyStatus } from "./codex-cli.js";
 export type { CodexCwdDiagnostic, CodexCwdDiagnosticSource, CodexCwdInspection, CodexCwdInspectionState } from "./cwd-diagnostic.js";
 export type { CodexInputItem, CodexPromptInput, CodexTurnInput } from "./input.js";
+export type { CodexTransportDiagnostic, CodexTransportFailureKind, CodexTransportRequestDiagnostic } from "./transport-diagnostic.js";
 
 export const CODEX_REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
 
@@ -272,6 +274,7 @@ export interface CodexAdapter {
   cancel?(sessionId: string): Promise<void>;
   getStatus(sessionId: string): Promise<CodexSessionStatus>;
   getCwdDiagnostic?(sessionId?: string): CodexCwdDiagnostic | undefined;
+  getTransportDiagnostic?(): CodexTransportDiagnostic | undefined;
   listSessions(routeKey?: string): Promise<CodexSessionSummary[]>;
   getSessionDetail?(sessionId: string): Promise<CodexSessionDetail | undefined>;
   resolveApproval?(approvalKey: string, decision: ApprovalDecision): Promise<void>;

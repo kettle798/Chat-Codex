@@ -251,6 +251,7 @@ export class Bridge {
       commentaryDelivery: this.commentaryDelivery,
       notificationDelivery: this.notificationDelivery,
       pendingInput: this.pendingInput,
+      transportDiagnostic: () => this.codex.getTransportDiagnostic?.(),
       startRouteWorker: (routeKey) => this.routeQueue.startRouteWorker(routeKey),
       routeQueueLength: (routeKey) => this.routeQueue.queueLength(routeKey),
       hasRouteWorker: (routeKey) => this.routeQueue.hasWorker(routeKey),

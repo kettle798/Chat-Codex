@@ -120,6 +120,29 @@ test("ApprovalManager cancels pending approvals for a route", () => {
   assert.equal(manager.list("route-b").length, 1);
 });
 
+test("ApprovalManager cancels only approvals from a failed turn", () => {
+  const manager = new ApprovalManager();
+  const failedTurn = manager.create("route-a", "user", {
+    kind: "command",
+    sessionId: "s1",
+    turnId: "t1",
+    itemId: "i1",
+  });
+  const activeTurn = manager.create("route-a", "user", {
+    kind: "command",
+    sessionId: "s1",
+    turnId: "t2",
+    itemId: "i2",
+  });
+
+  const cancelled = manager.cancelTurn("route-a", "s1", "t1", "transport failed");
+
+  assert.deepEqual(cancelled.map((pending) => pending.approvalKey), [failedTurn.approvalKey]);
+  assert.equal(manager.get(failedTurn.approvalKey)?.status, "resolved");
+  assert.equal(manager.get(failedTurn.approvalKey)?.decision, "cancel");
+  assert.equal(manager.get(activeTurn.approvalKey)?.status, "pending");
+});
+
 test("ApprovalManager resolves pending approvals by adapter request id", () => {
   const manager = new ApprovalManager({ ttlMs: 60_000 });
   const pending = manager.create("route-a", "user", {

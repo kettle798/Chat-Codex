@@ -74,7 +74,7 @@
   Session 上下文外部更新检测与发送前刷新设计。说明独立模式下 Chat-Codex 如何在用户发消息前检测电脑端 Codex CLI 是否更新了同一 session，并在开关启用时重新加载后再投递消息；该方案是懒刷新，不是实时共享 app-server 模式，并要求兼容 macOS/Windows。
 
 - `context-compaction-and-refresh-reply-delivery-design.zh-CN.md`
-  上下文压缩与刷新回复投递设计。说明自动 `contextCompaction` 如何绕过普通 progress 策略投递到对应 route，以及 `/context-refresh reload` 如何在重载后通过 app-server `thread/read(includeTurns: true)` 同步最后一条最终 assistant 回复。
+  上下文压缩与刷新回复投递设计。说明自动 `contextCompaction` 如何绕过普通 progress 策略投递到对应 route，以及 `/context-refresh reload` 如何通过 metadata-only resume 和有界分页同步最后一条最终 assistant 回复。
 
 - `runtime-event-and-cache-retention-analysis.zh-CN.md`
   运行期事件、审批与缓存保留分析。完整盘点 Codex 事件、turn 队列、审批、`request_user_input`、渠道缓存、TUI 和 state 文件的保留边界；明确 pending approval 绝不按时间过期，terminal approval 才能清理，并记录当前需要后续收敛的队列和卡片生命周期问题。
@@ -90,6 +90,12 @@
 
 - `2026-09-05-codex-ddf04ad26789-app-server-protocol-compatibility.zh-CN.md`
   2026-09-05 基于 Codex 源码 `ddf04ad26789d040f9ef6a96736f76602e35a6cc` 的 app-server 协议专用适配清单。逐项比对当前本地 Codex 源码与 Chat-Codex 已有能力，明确新增 RPC、通知、审批、用户输入、上下文刷新和 item 字段哪些必须适配、哪些仅分类、哪些当前不开放；不讨论模型或新产品功能。
+
+- `2026-09-06-codex-ddf04ad26789-recap-channel-delivery-adaptation-analysis.zh-CN.md`
+  2026-09-06 基于 Codex 源码 `ddf04ad26789d040f9ef6a96736f76602e35a6cc` 的 Recap（`/recap`）独立适配分析。明确它是官方 TUI 的用户可见回顾、不是 app-server 推送，也不是 `/compact`；记录 Chat-Codex 如何用隔离临时 thread 生成内容并精确投递回原微信/飞书 route，以及手动优先、自动触发待确认的边界。
+
+- `2026-09-30-codex-app-server-json-rpc-large-payload-analysis.zh-CN.md`
+  Codex app-server 大型 JSON-RPC 解析失败排查与修复。记录 `Unterminated string in JSON` 的本地错误链路、Node 大行验证、完整历史读取放大点、分页历史迁移、受限诊断、同 session 恢复与不自动重放任务的实现和验证。
 
 - `codex-writestdin-channel-adaptation-design.zh-CN.md`
   Codex `writeStdin` 终端输入审批的微信/飞书渠道适配设计与进度。记录微信文字审批链路、飞书私聊两按钮卡片、通用 `cancel` decision 扩展、完整输入展示边界、自动化结果与待补的真实渠道测试。

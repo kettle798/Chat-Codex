@@ -201,6 +201,7 @@ export class BridgeRouteQueue {
           continue;
         }
         this.logCwdDiagnostic(error);
+        this.logTransportDiagnostic(error);
         await this.delivery.sendText(task.target, `Codex 执行失败: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
@@ -374,6 +375,14 @@ export class BridgeRouteQueue {
               }
             } else if (event.type === "turn.failed") {
               turnFailed = true;
+              this.approvals.cancelTurn(
+                message.routeKey,
+                event.sessionId,
+                event.turnId,
+                "Codex 当前任务已失败，审批不可再处理。",
+              );
+              this.pendingInput?.clearTurn(message.routeKey, event.sessionId, event.turnId);
+              this.logTransportDiagnostic(new Error(event.error));
               this.state.setSessionStatus(session.id, { type: "failed", error: event.error });
               await this.progressDelivery.flushRoute(message.routeKey);
               await this.commentaryDelivery.flushRoute(message.routeKey);
@@ -432,6 +441,24 @@ export class BridgeRouteQueue {
       inheritedProcessCwd: diagnostic.inheritedProcessCwd.cwd,
       inheritedProcessCwdState: diagnostic.inheritedProcessCwd.state,
       inheritedProcessCwdRealpath: diagnostic.inheritedProcessCwd.realpath,
+      error: diagnostic.error,
+    });
+  }
+
+  private logTransportDiagnostic(error: unknown): void {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const diagnostic = this.codex.getTransportDiagnostic?.();
+    if (!diagnostic || diagnostic.error !== errorMessage) return;
+    this.logger.error("codex app-server transport diagnostic", {
+      kind: diagnostic.kind,
+      observedAt: diagnostic.observedAt,
+      processId: diagnostic.processId,
+      stdoutLineLength: diagnostic.stdoutLineLength,
+      exitCode: diagnostic.exitCode,
+      signal: diagnostic.signal,
+      pendingRequests: diagnostic.pendingRequests.map((request) => request.method),
+      recentRequests: diagnostic.recentRequests.map((request) => request.method),
+      stderrTail: diagnostic.stderrTail,
       error: diagnostic.error,
     });
   }

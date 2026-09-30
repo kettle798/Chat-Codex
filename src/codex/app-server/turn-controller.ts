@@ -132,9 +132,16 @@ export class AppServerTurnController {
   failAll(error: Error): void {
     for (const turn of this.turnQueues.values()) {
       turn.queue.push({ type: "turn.failed", sessionId: turn.sessionId, turnId: turn.turnId, error: error.message });
+      const stored = this.sessions.get(turn.sessionId);
+      if (stored) {
+        stored.status = withContext(stored, { type: "failed", error: error.message });
+        stored.currentTurnId = undefined;
+        stored.updatedAt = new Date().toISOString();
+      }
       turn.queue.close();
     }
     this.turnQueues.clear();
+    this.earlyTurnEvents.clear();
     this.closedTurnIds.clear();
   }
 

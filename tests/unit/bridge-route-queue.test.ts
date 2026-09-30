@@ -40,6 +40,17 @@ test("BridgeRouteQueue clears chat approvals when app-server resolves request", 
   assert.ok(fixture.sentTexts.some((text) => text.includes("done after external approval")));
 });
 
+test("BridgeRouteQueue clears chat approvals when the originating turn fails", async () => {
+  const fixture = routeQueueFixture({ codex: new FailedApprovalCodexAdapter() });
+
+  await fixture.queue.enqueuePrompt(message("route-a", "需要审批"), target("route-a"), "需要审批");
+  await fixture.queue.waitForWorkers();
+
+  assert.equal(fixture.approvals.list("route-a").length, 0);
+  assert.ok(fixture.sentTexts.some((text) => text.includes("Codex 请求审批")));
+  assert.ok(fixture.sentTexts.some((text) => text === "Codex 执行失败: app-server transport failed"));
+});
+
 test("BridgeRouteQueue delivers Codex notifications even when progress is suppressed", async () => {
   const fixture = routeQueueFixture({
     codex: new NotificationCodexAdapter({
@@ -436,6 +447,27 @@ class ResolvedApprovalCodexAdapter extends MockCodexAdapter {
     yield { type: "approval.resolved", sessionId, turnId, adapterApprovalId: "approval-resolved" };
     yield { type: "assistant.completed", sessionId, turnId, text: "done after external approval" };
     yield { type: "turn.completed", sessionId, turnId };
+  }
+}
+
+class FailedApprovalCodexAdapter extends MockCodexAdapter {
+  override async *run(sessionId: string, _prompt: CodexPromptInput): AsyncIterable<CodexEvent> {
+    const turnId = "failed-approval-turn";
+    yield { type: "turn.started", sessionId, turnId };
+    yield {
+      type: "approval.requested",
+      sessionId,
+      turnId,
+      approval: {
+        kind: "command",
+        adapterApprovalId: "approval-failed",
+        sessionId,
+        turnId,
+        itemId: "cmd-1",
+        command: "touch failed.txt",
+      },
+    };
+    yield { type: "turn.failed", sessionId, turnId, error: "app-server transport failed" };
   }
 }
 

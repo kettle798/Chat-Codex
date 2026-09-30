@@ -18,8 +18,11 @@ const fs = require("node:fs");
 const readline = require("node:readline");
 fs.appendFileSync(${JSON.stringify(path.join(root, "fake-app-server-starts.log"))}, process.pid + "\\n");
 const requestLog = ${JSON.stringify(path.join(root, "fake-app-server-requests.log"))};
+const requestDetailLog = ${JSON.stringify(path.join(root, "fake-app-server-request-details.log"))};
+const paginationUnavailable = fs.existsSync(${JSON.stringify(path.join(root, "pagination-unavailable"))});
 const rl = readline.createInterface({ input: process.stdin });
 let threadId = "thread-app-server-1";
+let loadedThreadId = null;
 let turnId = "turn-app-server-1";
 let threadSequence = 1;
 let ignoreInterrupt = false;
@@ -52,6 +55,7 @@ function thread(cwd) {
 }
 rl.on("line", (line) => {
   const message = JSON.parse(line);
+  fs.appendFileSync(requestDetailLog, JSON.stringify({ id: message.id ?? null, method: message.method ?? null, params: message.params ?? null }) + "\\n");
   if (message.method === "initialize") {
     send({ id: message.id, result: { userAgent: "fake-codex", codexHome: "${root}", platformFamily: "unix", platformOs: "macos" } });
     return;
@@ -131,11 +135,17 @@ rl.on("line", (line) => {
       return;
     }
     threadId = "thread-app-server-" + threadSequence++;
+    loadedThreadId = threadId;
     send({ id: message.id, result: { thread: thread(message.params.cwd), cwd: message.params.cwd, model: "fake", modelProvider: "openai", serviceTier: null, instructionSources: [], approvalPolicy: "on-request", approvalsReviewer: "user", sandbox: { type: "workspaceWrite", writableRoots: [message.params.cwd], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false }, reasoningEffort: "medium" } });
     return;
   }
   if (message.method === "thread/resume") {
+    if (message.params.excludeTurns !== true) {
+      send({ id: message.id, error: { code: -32602, message: "excludeTurns must be true" } });
+      return;
+    }
     threadId = message.params.threadId;
+    loadedThreadId = threadId;
     send({ id: message.id, result: { thread: thread(process.cwd()), cwd: process.cwd(), model: "fake", modelProvider: "openai", serviceTier: null, instructionSources: [], approvalPolicy: "on-request", approvalsReviewer: "user", sandbox: { type: "workspaceWrite", writableRoots: [process.cwd()], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false }, reasoningEffort: "medium" } });
     return;
   }
@@ -170,26 +180,6 @@ rl.on("line", (line) => {
     return;
   }
   if (message.method === "thread/read") {
-    if (message.params.includeTurns === true) {
-      send({
-        id: message.id,
-        result: {
-          thread: {
-            ...thread("/repo/read-history"),
-            id: message.params.threadId,
-            sessionId: message.params.threadId,
-            turns: [{
-              id: "history-turn-1",
-              items: [
-                { type: "agentMessage", id: "history-commentary", text: "终端旁白，不应投递", phase: "commentary", memoryCitation: null },
-                { type: "agentMessage", id: "history-final", text: "终端最新最终回复", phase: "final_answer", memoryCitation: null },
-              ],
-            }],
-          },
-        },
-      });
-      return;
-    }
     if (message.params.includeTurns !== false) {
       send({ id: message.id, error: { code: -32602, message: "includeTurns must be false" } });
       return;
@@ -213,6 +203,40 @@ rl.on("line", (line) => {
       ephemeral: false,
     };
     send({ id: message.id, result: { thread: detail } });
+    return;
+  }
+  if (message.method === "thread/turns/list") {
+    if (paginationUnavailable) {
+      send({ id: message.id, error: { code: -32601, message: "method not found" } });
+      return;
+    }
+    if (message.params.sortDirection !== "desc" || message.params.itemsView !== "notLoaded") {
+      send({ id: message.id, error: { code: -32602, message: "invalid thread page params" } });
+      return;
+    }
+    send({ id: message.id, result: { data: [{ id: "history-turn-1" }], nextCursor: null, backwardsCursor: null } });
+    return;
+  }
+  if (message.method === "thread/items/list") {
+    if (paginationUnavailable) {
+      send({ id: message.id, error: { code: -32601, message: "method not found" } });
+      return;
+    }
+    if (message.params.turnId !== "history-turn-1" || message.params.sortDirection !== "desc") {
+      send({ id: message.id, error: { code: -32602, message: "invalid item page params" } });
+      return;
+    }
+    send({
+      id: message.id,
+      result: {
+        data: [
+          { turnId: "history-turn-1", item: { type: "agentMessage", id: "history-final", text: "终端最新最终回复", phase: "final_answer", memoryCitation: null } },
+          { turnId: "history-turn-1", item: { type: "agentMessage", id: "history-commentary", text: "终端旁白，不应投递", phase: "commentary", memoryCitation: null } },
+        ],
+        nextCursor: null,
+        backwardsCursor: null,
+      },
+    });
     return;
   }
   if (message.method === "thread/goal/get") {
@@ -264,6 +288,10 @@ rl.on("line", (line) => {
   }
   if (message.method === "turn/start") {
     fs.appendFileSync(requestLog, "turn/start\\n");
+    if (message.params.threadId !== loadedThreadId) {
+      send({ id: message.id, error: { code: -32602, message: "thread must be resumed before turn/start" } });
+      return;
+    }
     const prompt = message.params.input?.[0]?.text || "";
     if (prompt.includes("invalid cwd")) {
       send({ id: message.id, error: { code: -32602, message: "invalid cwd: Operation not permitted (os error 1)" } });
@@ -271,6 +299,10 @@ rl.on("line", (line) => {
     }
     turnId = "turn-app-server-" + Date.now();
     send({ id: message.id, result: { turn: { id: turnId, items: [], itemsView: "complete", status: "inProgress", error: null, startedAt: 1778716800, completedAt: null, durationMs: null } } });
+    if (prompt.includes("malformed json")) {
+      process.stdout.write('{"method":"item/completed","params":{"payload":"unterminated\\n');
+      return;
+    }
     if (prompt.includes("transient reconnect final")) {
       send({ method: "error", params: { threadId, turnId, error: { message: "Reconnecting... 5/5" } } });
       send({ method: "item/completed", params: { threadId, turnId, completedAtMs: Date.now(), item: { type: "agentMessage", id: "msg-1", text: "reconnect final done", phase: null, memoryCitation: null } } });
@@ -495,6 +527,15 @@ function fakeRequestCount(root: string, method: string): number {
   const filePath = path.join(root, "fake-app-server-requests.log");
   if (!fs.existsSync(filePath)) return 0;
   return fs.readFileSync(filePath, "utf8").split(/\r?\n/).filter((line) => line === method).length;
+}
+
+function fakeRequestDetails(root: string): Array<{ id: string | number | null; method: string | null; params: Record<string, unknown> | null }> {
+  const filePath = path.join(root, "fake-app-server-request-details.log");
+  if (!fs.existsSync(filePath)) return [];
+  return fs.readFileSync(filePath, "utf8")
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { id: string | number | null; method: string | null; params: Record<string, unknown> | null });
 }
 
 test("AppServerCodexAdapter routes command approvals through resolveApproval", async () => {
@@ -1332,7 +1373,7 @@ test("AppServerCodexAdapter manages experimental thread goals", async () => {
   assert.equal(empty, null);
 });
 
-test("AppServerCodexAdapter reloads a session and recovers its last final assistant reply", async () => {
+test("AppServerCodexAdapter reloads a session with paged history and recovers its last final assistant reply", async () => {
   const root = tempDir();
   const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
   const session = await adapter.startSession({
@@ -1343,9 +1384,69 @@ test("AppServerCodexAdapter reloads a session and recovers its last final assist
 
   const reloaded = await adapter.reloadSession(session.id);
   await adapter.stop();
+  const requests = fakeRequestDetails(root);
 
   assert.equal(reloaded.session.id, session.id);
   assert.equal(reloaded.lastAssistantMessage, "终端最新最终回复");
+  assert.equal(requests.some((request) => request.method === "thread/resume" && request.params?.excludeTurns === true), true);
+  assert.equal(requests.some((request) => request.method === "thread/turns/list"), true);
+  assert.equal(requests.some((request) => request.method === "thread/items/list"), true);
+  assert.equal(requests.some((request) => request.method === "thread/read" && request.params?.includeTurns === true), false);
+});
+
+test("AppServerCodexAdapter keeps reload working when pagination is unavailable without requesting full history", async () => {
+  const root = tempDir();
+  fs.writeFileSync(path.join(root, "pagination-unavailable"), "1");
+  const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
+  const session = await adapter.startSession({
+    routeKey: "route-1",
+    cwd: root,
+    title: "test",
+  });
+
+  const reloaded = await adapter.reloadSession(session.id);
+  await adapter.stop();
+  const requests = fakeRequestDetails(root);
+
+  assert.equal(reloaded.session.id, session.id);
+  assert.equal(reloaded.lastAssistantMessage, undefined);
+  assert.equal(requests.some((request) => request.method === "thread/turns/list"), true);
+  assert.equal(requests.some((request) => request.method === "thread/read" && request.params?.includeTurns === true), false);
+});
+
+test("AppServerCodexAdapter fails an active turn on malformed JSON and starts a fresh process for the next turn", async () => {
+  const root = tempDir();
+  const adapter = new AppServerCodexAdapter({ codexBin: fakeCodexBin(root) });
+  const session = await adapter.startSession({
+    routeKey: "route-1",
+    cwd: root,
+    title: "transport recovery",
+  });
+  const failedEvents: CodexEvent[] = [];
+
+  try {
+    for await (const event of adapter.run(session.id, "malformed json")) {
+      failedEvents.push(event);
+    }
+    const status = await adapter.getStatus(session.id);
+    const diagnostic = adapter.getTransportDiagnostic();
+    const recoveredEvents: CodexEvent[] = [];
+    for await (const event of adapter.run(session.id, "progress after transport recovery")) {
+      recoveredEvents.push(event);
+    }
+
+    assert.ok(failedEvents.some((event) => event.type === "turn.started"));
+    assert.ok(failedEvents.some((event) => event.type === "turn.failed" && /Unterminated string/.test(event.error)));
+    assert.equal(failedEvents.some((event) => event.type === "turn.completed"), false);
+    assert.equal(status.type, "failed");
+    assert.equal(diagnostic?.kind, "invalid_json");
+    assert.ok((diagnostic?.stdoutLineLength ?? 0) > 0);
+    assert.equal(fakeRequestCount(root, "turn/start"), 2);
+    assert.equal(fakeAppServerStartCount(root), 2);
+    assert.ok(recoveredEvents.some((event) => event.type === "assistant.completed" && event.text === "progress done"));
+  } finally {
+    await adapter.stop();
+  }
 });
 
 test("AppServerCodexAdapter starts and waits for thread compaction", async () => {

@@ -8,7 +8,8 @@ Codex 源码基线：`references/openai-codex` @ `ddf04ad26789d040f9ef6a96736f76
 
 状态：已完成源码比对和适配分级；协议项 1（`writeStdin`）的中间件、官方语义等价的审批内容展示、
 微信文字链路和飞书私聊两按钮审批卡均已实现，并有 mock / fake app-server / fake channel 自动化覆盖。
-真实微信、飞书帐号验证仍待补测；其它协议项的**业务适配**尚未开始实现。
+2026-09-30 已补完分页历史和 `excludeTurns` 恢复；真实微信、飞书帐号验证仍待补测，其它协议项的
+**业务适配**尚未开始实现。
 
 更新：2026-09-05
 
@@ -192,7 +193,7 @@ plugin/reconcile
 
 ### 5.1 分页历史为什么是已有功能的适配，而不是新功能
 
-当前 `AppServerCodexAdapter.reloadSession()` 的过程是：重新启动 app-server、`thread/resume` 同一个
+修复前，`AppServerCodexAdapter.reloadSession()` 的过程是：重新启动 app-server、`thread/resume` 同一个
 thread，再由 `thread/read({ includeTurns: true })` 读取整段历史，从中找最后最终 assistant 回复。
 
 新版源码明确把全量 `includeTurns` 标为对旧客户端保留的兼容方式，并新增：
@@ -203,12 +204,13 @@ thread，再由 `thread/read({ includeTurns: true })` 读取整段历史，从�
 - `turnsBackwardsCursor` / `itemsBackwardsCursor`：从最新端往回读取的游标。
 
 目标不是重新设计上下文，也不是清历史，而是保持已有 `/context-refresh reload` 在长 session 和新版
-app-server 下仍然正确。建议的最小兼容策略：
+app-server 下仍然正确。2026-09-30 已实施的策略：
 
-1. 新 app-server：`thread/resume` 携带 `excludeTurns: true`，仅读取最新一页 turn/item 来找最终回复；
-2. 旧 app-server：若 `excludeTurns` 或分页方法不被认识，重试不带该字段的 `thread/resume`，再回退
-   当前 `thread/read(includeTurns: true)`；
-3. 不对每次刷新无上限拉取整个 rollout 历史。
+1. `thread/resume` 携带 `excludeTurns: true`，仅读取有界的最新 turn/item 页来找最终回复；
+2. 分页方法不支持时，reload 保持成功但不补投最后回复；
+3. `excludeTurns` 不支持时保留原始协议错误并要求升级 app-server，不回退
+   `thread/read(includeTurns: true)`；
+4. 不对每次刷新无上限拉取整个 rollout 历史。
 
 这项改变只发生在刷新/恢复路径；同一聊天正常连续发送消息本来就在同一个 Codex thread 内，不会在
 每一轮重新读取完整历史。
@@ -228,8 +230,8 @@ app-server 下仍然正确。建议的最小兼容策略：
 
 | 变化 | 当前实现 | 结论 |
 | --- | --- | --- |
-| `thread/resume.excludeTurns?: boolean` 新增 | 当前恢复不传该字段 | 仅在第 5.1 的分页刷新改造中使用；旧 server 必须回退 |
-| `thread/read.includeTurns` 被标为全量 hydration 旧兼容路径 | 当前 `reloadSession()` 依赖它 | 必须替换为分页优先；保留旧 server fallback |
+| `thread/resume.excludeTurns?: boolean` 新增 | 已传该字段 | 用于 metadata-only 恢复；旧 server 不支持时要求升级，避免完整历史风险 |
+| `thread/read.includeTurns` 被标为全量 hydration 旧兼容路径 | `reloadSession()` 不再依赖它 | 已替换为有界分页；不保留 full-history fallback |
 | `ThreadResumeResponse` 新增两个 backwards cursor | 当前未读取 | 分页改造时读取；否则不必处理 |
 
 ### 6.2 `turn/start`
@@ -531,8 +533,8 @@ transparentBackground?: boolean
 
 | 方法 | 当前分类 | 后续实际实现后的状态 |
 | --- | --- | --- |
-| `thread/turns/list` | `candidate` | `handled`，仅用于已有刷新路径 |
-| `thread/items/list` | `candidate` | `handled`，仅用于已有刷新路径 |
+| `thread/turns/list` | `handled` | 已用于已有刷新路径 |
+| `thread/items/list` | `handled` | 已用于已有刷新路径 |
 | `thread/revert` | `not_exposed` | 保持 `not_exposed` |
 | `thread/section/move` | `not_exposed` | 保持 `not_exposed` |
 | `threadSection/list/create/update/delete` | `not_exposed` | 保持 `not_exposed` |
@@ -557,7 +559,7 @@ transparentBackground?: boolean
    并保留 `/OK /P /NO`；当前 `writeStdin` 固定为 `/OK` → `accept`、`/NO` → `cancel`，不提供 `/P`。
 2. 输入：解析 `isBlocking`；旧 server 缺字段时保持当前行为。
 3. async Agent 消息：独立投递但不结束 turn；普通用户回复复用 `turn/steer`。
-4. 刷新：分页读取最新历史，并在旧 app-server 上回退到现有全量读取。
+4. 刷新：已使用有界分页读取最新历史；分页不支持时跳过最后回复补投，不回退全量读取。
 5. 会话回退通知：失效本地历史/状态缓存，不触发 route 解绑。
 6. 媒体生成：优先处理 `imageGeneration.failure`，避免失败误报完成。
 

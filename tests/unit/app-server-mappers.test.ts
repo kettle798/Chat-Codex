@@ -11,7 +11,7 @@ import { APP_SERVER_PROTOCOL_CAPABILITIES, type AppServerProtocolDirection } fro
 import { approvalPolicyForRunPolicy, approvalsReviewerForRunPolicy, cloneRunPolicy, sandboxModeForRunPolicy, sandboxPolicyForRunPolicy } from "../../src/codex/app-server/run-policy.js";
 import { contextFromServerRequestParams, unsupportedServerRequestResponse, userInputRequestFromServerRequest } from "../../src/codex/app-server/server-request-mapper.js";
 import { collaborationModePayload, truncatePrompt, withContext, withModelPolicy } from "../../src/codex/app-server/session-status.js";
-import { lastAssistantMessageFromThread, readLastAssistantMessageFromHistory } from "../../src/codex/app-server/thread-history.js";
+import { readLastAssistantMessageFromPages } from "../../src/codex/app-server/thread-history.js";
 import { sessionSummaryFromThread } from "../../src/codex/app-server/thread-list.js";
 import { AsyncEventQueue, createTurnQueueRecord, shouldCreateBackgroundTurn } from "../../src/codex/app-server/turn-store.js";
 import { arrayValue, isoFromSeconds, numberValue, objectValue, objectValueOrNull, stringValue } from "../../src/codex/app-server/value-parsers.js";
@@ -308,28 +308,52 @@ test("app-server thread list mapper converts thread metadata to session summarie
   })?.status, { type: "unknown", detail: "not loaded" });
 });
 
-test("app-server thread history mapper returns the newest final assistant reply", async () => {
-  assert.equal(lastAssistantMessageFromThread({
-    turns: [
-      {
-        items: [
-          { type: "agentMessage", text: "旧回复", phase: "final_answer" },
+test("app-server thread history mapper reads the newest final assistant reply through bounded pages", async () => {
+  const calls: Array<{ method: string; params: Record<string, unknown> }> = [];
+  const message = await readLastAssistantMessageFromPages(async (method, params) => {
+    calls.push({ method, params });
+    if (method === "thread/turns/list") {
+      return { data: [{ id: "turn-new" }], nextCursor: null };
+    }
+    if (params.cursor === null) {
+      return {
+        data: [
+          { turnId: "turn-new", item: { type: "agentMessage", text: "最后旁白", phase: "commentary" } },
+          { turnId: "turn-new", item: { type: "plan", text: "继续检查" } },
         ],
-      },
-      {
-        items: [
-          { type: "agentMessage", text: "最后旁白", phase: "commentary" },
-          { type: "agentMessage", text: "  最新回复  ", phase: "final_answer" },
-        ],
-      },
-    ],
-  }), "最新回复");
-  assert.equal(lastAssistantMessageFromThread({
-    turns: [{ items: [{ type: "agentMessage", text: "只有旁白", phase: "commentary" }] }],
-  }), undefined);
-  assert.equal(await readLastAssistantMessageFromHistory(async () => {
-    throw new Error("thread history unavailable");
+        nextCursor: "older-items",
+      };
+    }
+    return {
+      data: [{ turnId: "turn-new", item: { type: "agentMessage", text: "  最新回复  ", phase: "final_answer" } }],
+      nextCursor: null,
+    };
+  }, "thread-1");
+
+  assert.equal(message, "最新回复");
+  assert.deepEqual(calls, [
+    {
+      method: "thread/turns/list",
+      params: { threadId: "thread-1", cursor: null, limit: 4, sortDirection: "desc", itemsView: "notLoaded" },
+    },
+    {
+      method: "thread/items/list",
+      params: { threadId: "thread-1", turnId: "turn-new", cursor: null, limit: 16, sortDirection: "desc" },
+    },
+    {
+      method: "thread/items/list",
+      params: { threadId: "thread-1", turnId: "turn-new", cursor: "older-items", limit: 16, sortDirection: "desc" },
+    },
+  ]);
+  assert.equal(await readLastAssistantMessageFromPages(async () => {
+    throw new Error("JSON-RPC error -32601");
   }, "thread-1"), undefined);
+  await assert.rejects(
+    readLastAssistantMessageFromPages(async () => {
+      throw new Error("Unterminated string in JSON at position 24");
+    }, "thread-1"),
+    /Unterminated string/,
+  );
 });
 
 test("app-server input mapper preserves text, local images, and file instructions", () => {
